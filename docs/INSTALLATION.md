@@ -12,12 +12,12 @@ Les parcours réellement vérifiés et leurs limites figurent dans [VALIDATION.m
 
 ## Récupérer la version
 
-Télécharge la [release `v0.2.0`](https://github.com/tiasslevo/vibe-claw-light/releases/tag/v0.2.0) et extrais toute l'archive dans un dossier durable, par exemple `Documents\vibe-claw-light`. Ne lance pas l'installation à l'intérieur du ZIP.
+Télécharge la [release `v0.3.0`](https://github.com/tiasslevo/vibe-claw-light/releases/tag/v0.3.0) et extrais toute l'archive dans un dossier durable, par exemple `Documents\vibe-claw-light`. Ne lance pas l'installation à l'intérieur du ZIP.
 
 Avec Git :
 
 ```sh
-git clone --branch v0.2.0 --depth 1 https://github.com/tiasslevo/vibe-claw-light.git
+git clone --branch v0.3.0 --depth 1 https://github.com/tiasslevo/vibe-claw-light.git
 cd vibe-claw-light
 ```
 
@@ -33,7 +33,7 @@ Double-clique sur `install.cmd` et choisis `codex` ou `claude`. Depuis PowerShel
 .\install.cmd -Provider claude
 ```
 
-L'installateur prépare les dépendances et ouvre une page locale. Tu y choisis le nom, le dossier de rangement et les accès de l'assistant, puis tu associes Telegram. Il termine par un petit appel au moteur et démarre le service en arrière-plan.
+L'installateur prépare les dépendances et ouvre une page locale. Elle suit quatre étapes : connexion au moteur, réglages de l'assistant, association Telegram et démarrage. Après l'association, elle vérifie les prérequis, teste le modèle puis démarre le service en arrière-plan. Attends la confirmation **Telegram associé, modèle testé, service démarré** avant de considérer l'installation terminée.
 
 La fenêtre affiche les erreurs et reste ouverte. Si le bot tourne déjà, arrête-le avec `stop.cmd` avant de reprendre la configuration. Relancer le setup conserve la mémoire et propose les valeurs existantes.
 
@@ -55,7 +55,7 @@ Il faut Bash, `curl` et un système compatible avec le CLI choisi. Le script uti
 
 ## Connexion au moteur
 
-Si le CLI est déjà connecté, le setup passe directement à la configuration. Sinon, le bouton **Ouvrir le terminal de connexion** lance la commande native :
+Si le CLI est déjà connecté, le setup passe directement à la configuration. Sinon, le bouton **Se connecter avec Codex** ou **Se connecter avec Claude Code** lance la commande native :
 
 ```text
 codex login
@@ -69,7 +69,7 @@ claude auth login
 
 La connexion se déroule dans le terminal de l'installation ou dans une nouvelle fenêtre locale. Le CLI peut ouvrir le site officiel et demander de recopier un code : colle ce code dans ce terminal. La page de configuration du starter ne reçoit aucun mot de passe ni code OAuth.
 
-Si l'installation a été lancée depuis un agent non interactif, le setup cherche à ouvrir un vrai terminal sur le PC. S'il ne peut pas, il affiche la commande à lancer manuellement. Termine la connexion, puis clique sur **J'ai terminé la connexion, vérifier**. N'envoie pas les codes dans la conversation avec ton agent.
+Si l'installation a été lancée depuis un agent non interactif, le setup cherche à ouvrir un vrai terminal sur le PC. S'il ne peut pas, il affiche la commande à lancer manuellement. Termine la connexion : la page en revérifie automatiquement l'état pendant une durée limitée. Le bouton de vérification reste disponible. N'envoie pas les codes dans la conversation avec ton agent.
 
 Tu peux aussi effectuer cette connexion avant de lancer l'installation. L'authentification est conservée par le CLI officiel ; le starter en vérifie le statut.
 
@@ -81,6 +81,22 @@ Tu peux aussi effectuer cette connexion avant de lancer l'installation. L'authen
 4. Ouvre le lien d'association proposé et appuie sur **Démarrer** dans Telegram.
 
 Le lien contient un secret temporaire et associe ton compte sans te demander de rechercher son identifiant numérique. Le bot accepte ensuite ce compte uniquement, en discussion privée. Ne lance pas deux programmes avec le même token. Si un token a été partagé, révoque-le dans BotFather et relance le setup avec le nouveau.
+
+## Attendre que l'assistant soit prêt
+
+L'association Telegram enregistre les réglages. La page reste ouverte pour afficher les vérifications et le démarrage : **Telegram associé**, **Connexion Telegram**, **Modèle testé**, puis **Service démarré**.
+
+Un problème réseau, un token refusé ou une erreur du moteur laisse la page ouverte avec une explication. Utilise **Réessayer l'étape restante** après avoir corrigé le problème, ou retourne aux réglages si nécessaire. Le diagnostic réessaie brièvement les erreurs réseau récupérables, sans traiter automatiquement toute erreur comme un mauvais token.
+
+Le test modèle crée un fichier temporaire distinct des documents de l'utilisateur. Si un prérequis essentiel échoue, ce test est différé et ne consomme pas de quota. Un succès est réutilisé pendant **quinze minutes**, tant que la configuration contrôlée reste identique. La connexion et les prérequis sont tout de même revérifiés lors d'une reprise.
+
+Quand la page annonce que l'assistant est prêt, tu peux terminer l'installation et fermer cet onglet. Ouvre ensuite le bot et demande :
+
+> Crée bienvenue.txt dans mon dossier de rangement avec une phrase de présentation, puis envoie-moi ce fichier.
+
+Ce fichier est créé à ta demande, pas par le diagnostic. Vérifie le document et sa réception dans Telegram.
+
+Un onglet périmé ne permet pas d'appliquer un ancien formulaire. Utilise la nouvelle page ouverte par le setup. Les champs de token restent vides lors d'un retour au formulaire ; le token existant peut rester conservé dans la configuration locale.
 
 ## Dossier de rangement et accès
 
@@ -122,7 +138,7 @@ Le profil, les préférences et les repères de projets sont enregistrés dans l
 | Petit test réel du modèle | `.venv\Scripts\python.exe run.py doctor --live` | `bash start.sh doctor --live` |
 | Exécution au premier plan | `.venv\Scripts\python.exe run.py run` | `bash start.sh run` |
 
-`doctor --live` utilise le quota du compte. Inutile de le répéter si l'installateur vient de le réussir. Pour observer un problème avec `run`, arrête d'abord le service existant, puis quitte avec Ctrl+C.
+`doctor` vérifie les prérequis sans appeler le modèle. `doctor --live` ajoute un test réel et utilise le quota si aucun succès compatible n'est disponible dans le cache de quinze minutes. Ces commandes ne démarrent pas le service ; le setup gère le diagnostic et le démarrage dans sa page. Pour observer un problème avec `run`, arrête d'abord le service existant, puis quitte avec Ctrl+C.
 
 Pour reprendre le setup :
 
@@ -140,9 +156,9 @@ Pour préparer les dépendances uniquement : `install.cmd -Provider codex -SkipS
 
 ## Changer de moteur
 
-Le second moteur doit être installé et connecté à son propre compte. Arrête le service et relance l'installateur en le choisissant pour le préparer. Quand il est prêt, `/switch codex` ou `/switch claude` vérifie sa connexion et recharge le bot.
+Envoie `/switch codex` ou `/switch claude`. Si le moteur est installé et connecté, le bot bascule puis confirme le moteur utilisé. Sinon, il explique la connexion à terminer ou fournit une demande à copier dans ton assistant local sur le PC.
 
-Depuis le PC, tu peux aussi lancer `python run.py switch claude` ou `python run.py switch codex` avec le Python de `.venv`. La mémoire est commune ; chaque moteur conserve sa propre conversation. Le programme ne transfère pas l'historique complet de l'un vers l'autre.
+Le [guide des moteurs](MOTEURS.md) prépare seulement le moteur manquant, avec `SkipSetup` lorsque nécessaire. Il conserve le bot, la mémoire et les sessions existantes sans refaire toute l'installation. Les deux moteurs gardent chacun leur conversation ; leur mémoire durable est commune.
 
 ## Si quelque chose bloque
 
@@ -160,7 +176,7 @@ Depuis le PC, tu peux aussi lancer `python run.py switch claude` ou `python run.
 
 Ne partage jamais `config.env`. Avant de joindre un diagnostic, retire tokens, identifiants, textes privés et chemins personnels.
 
-## Mettre à jour depuis la v0.1
+## Mettre à jour une installation existante
 
 Arrête le service et sauvegarde ta configuration, ta mémoire et tes documents dans un endroit privé. Mets ensuite à jour le code et les dépendances, en vérifiant les différences si ton agent a modifié ses propres fichiers.
 

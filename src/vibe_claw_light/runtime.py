@@ -6,6 +6,7 @@ from dataclasses import replace
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import threading
@@ -28,7 +29,7 @@ HELP = (
     "/continue : reprendre les demandes en attente\n"
     "/clear : nouvelle conversation, mémoire conservée\n"
     "/reload : recharger le code et les réglages\n"
-    "/switch codex ou /switch claude : changer de moteur déjà connecté\n"
+    "/switch codex ou /switch claude : choisir un moteur ou voir comment l'ajouter\n"
     "/help : cette aide"
 )
 
@@ -223,19 +224,54 @@ class Bot:
             self.persist()
             self.send("Nouvelle conversation. Votre mémoire personnelle est conservée.")
         elif name in {"/reload", "/switch"}:
+            reply = "Redémarrage en cours. Votre mémoire et vos sessions sont conservées."
             if name == "/switch":
                 if arg not in {"claude", "codex"}:
-                    self.send("Utilisez /switch codex ou /switch claude.")
+                    self.send("Utilisez /switch codex ou /switch claude. Un seul moteur suffit ; "
+                              "le second peut être ajouté plus tard depuis le PC.")
+                    return
+                if arg == self.config.provider:
+                    self.send(f"{arg} est déjà le moteur sélectionné. /info affiche l'état du bot.")
                     return
                 hint = self.config.codex_bin if arg == "codex" else self.config.claude_bin
-                ok, message = auth_status(arg, find_cli(arg, hint))
+                executable = find_cli(arg, hint)
+                if not executable:
+                    self.send(
+                        f"{arg} n'est pas installé ou n'est pas détecté sur ce PC. "
+                        f"Le bot reste sur {self.config.provider}.\n\n"
+                        "Dans Codex ou Claude Code sur le PC, ouvrez ce dossier :\n"
+                        f"{self.config.root}\n\n"
+                        "Puis copiez cette demande :\n"
+                        f"« Ajoute seulement le moteur {arg} à cette installation de Vibe Claw Light "
+                        "en suivant docs/MOTEURS.md. Conserve la configuration Telegram, la mémoire "
+                        "et les conversations. Accompagne-moi pour la connexion officielle, puis "
+                        "vérifie le démarrage. »\n\n"
+                        "La connexion peut demander une action dans le navigateur ou le terminal du PC. "
+                        "Aucun moteur n'a été installé ou changé depuis Telegram."
+                    )
+                    return
+                ok, message = auth_status(arg, executable)
                 if not ok:
-                    self.send(message + " Lancez l'installateur de ce moteur sur le PC.")
+                    login = "codex login" if arg == "codex" else "claude auth login"
+                    self.send(
+                        message + f" Le bot reste sur {self.config.provider}.\n\n"
+                        f"Sur le PC, terminez la connexion officielle avec {login}, "
+                        "dans un terminal interactif. Si besoin, demandez à votre assistant local "
+                        "de vous accompagner en suivant docs/MOTEURS.md dans :\n"
+                        f"{self.config.root}\n\n"
+                        "Gardez tout code de connexion dans le navigateur ou le terminal officiel. "
+                        f"Une fois connecté, envoyez /switch {arg} ici."
+                    )
                     return
                 save_config(self.config.root, {"PROVIDER": arg})
+                reply = (
+                    f"Connexion {arg} vérifiée. Je recharge le bot pour changer de moteur.\n"
+                    "La mémoire est commune ; chaque moteur retrouve sa propre conversation. "
+                    "L'historique complet n'est pas transféré d'un moteur à l'autre."
+                )
             self.invalidate()
             self.persist()
-            self.send("Redémarrage en cours. Votre mémoire et vos sessions sont conservées.")
+            self.send(reply)
             self.exit_code = RELOAD
             self.done.set()
 
@@ -347,7 +383,6 @@ class Bot:
                 generation = self.generation
                 session_id = self.state["sessions"].get(self.config.provider)
                 self.persist()
-            self.send("Je m'en occupe.")
             def remember_session(sid):
                 with self.mutex:
                     if generation == self.generation:
@@ -454,6 +489,9 @@ class Bot:
             for worker in workers:
                 worker.start()
             try:
+                write_json(self.config.data / "worker.ready.json", {
+                    "pid": os.getpid(), "provider": self.config.provider,
+                })
                 while not self.done.wait(0.2):
                     if (self.config.data / "stop.request").exists():
                         self.done.set()
@@ -463,4 +501,5 @@ class Bot:
                 self.cancel.set()
                 self.wake.set()
                 workers[1].join(timeout=20)
+                (self.config.data / "worker.ready.json").unlink(missing_ok=True)
             return self.exit_code

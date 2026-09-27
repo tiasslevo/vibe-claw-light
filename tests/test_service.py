@@ -9,6 +9,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from types import SimpleNamespace
 import unittest
@@ -36,6 +37,8 @@ with FileLock(data / "worker.lock"):
     starts = read_json(data / "starts.json", 0) + 1
     write_json(data / "starts.json", starts)
     write_json(data / "worker.json", {"pid": os.getpid()})
+    if not (data / "withhold-ready").exists():
+        write_json(data / "worker.ready.json", {"pid": os.getpid()})
     deadline = time.monotonic() + 30
     while not (data / "stop.request").exists():
         if (data / "reload.request").exists():
@@ -44,6 +47,9 @@ with FileLock(data / "worker.lock"):
         if time.monotonic() > deadline:
             sys.exit(12)
         time.sleep(0.02)
+    if (data / "slow-close").exists():
+        time.sleep(0.35)
+    atomic_write(data / "worker.closed", "closed\n")
 '''
 
 
@@ -87,7 +93,7 @@ class ServiceTests(unittest.TestCase):
                 stop_tree(proc, grace=0.2)
         proc.wait(timeout=5)
 
-    def start_fake(self, root):
+    def start_fake(self, root, cancel=None):
         launched = []
 
         def spawn(*args, **kwargs):
@@ -100,7 +106,7 @@ class ServiceTests(unittest.TestCase):
         with patch("vibe_claw_light.config.load_config", return_value=config), \
              patch.object(service, "command", side_effect=self.command), \
              patch.object(service.subprocess, "Popen", side_effect=spawn) as popen:
-            result = service.start(root)
+            result = service.start(root, cancel=cancel)
         return result, launched, popen
 
     def test_start_detaches_supervisor_and_stop_preserves_local_data(self):
@@ -112,6 +118,7 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(len(launched), 1)
         self.assertTrue(wait_until(lambda: is_locked(root / "data" / "worker.lock")))
         self.assertTrue(service.status(root)["running"])
+        self.assertTrue(service.status(root)["ready"])
         # Some Python distributions keep an intermediate launcher process.
         self.assertIsInstance(service.status(root)["pid"], int)
         self.assertIsNone(launched[0].poll())
@@ -194,14 +201,66 @@ class ServiceTests(unittest.TestCase):
              patch.object(service.time, "sleep"), \
              patch.object(service, "stop_tree") as stop:
             self.assertEqual(service.start(root), 1)
-        stop.assert_called_once_with(proc)
+        stop.assert_called_once_with(proc, grace=30)
+
+    def test_cancelled_start_does_not_launch_or_stop_a_preexisting_instance(self):
+        root = self.root_folder()
+        cancel = threading.Event()
+        cancel.set()
+        with patch.object(service.subprocess, "Popen") as popen, \
+                patch.object(service, "stop_tree") as stop, \
+                patch.object(service, "status", return_value={"running": True, "ready": True}):
+            self.assertEqual(service.start(root, cancel=cancel), 1)
+        popen.assert_not_called()
+        stop.assert_not_called()
+        self.assertFalse((root / "data" / "stop.request").exists())
+
+    def test_cancel_after_spawn_stops_only_the_owned_process(self):
+        root = self.root_folder()
+        cancel = threading.Event()
+        config = SimpleNamespace(owner_id=42, chat_id=42)
+        proc = Mock()
+
+        def spawn(*args, **kwargs):
+            cancel.set()
+            return proc
+
+        with patch("vibe_claw_light.config.load_config", return_value=config), \
+                patch.object(service.subprocess, "Popen", side_effect=spawn), \
+                patch.object(service, "status", return_value={"running": False, "ready": False}), \
+                patch.object(service, "stop_tree") as stop:
+            self.assertEqual(service.start(root, cancel=cancel), 1)
+        stop.assert_called_once_with(proc, grace=30)
+        self.assertFalse((root / "data" / "stop.request").exists())
+
+    @unittest.skipIf(os.name == "nt", "SIGTERM et arrêt coopératif POSIX")
+    def test_cancel_waits_for_the_separate_worker_to_close(self):
+        root = self.root_folder()
+        atomic_write(root / "data" / "withhold-ready", "fixture\n")
+        atomic_write(root / "data" / "slow-close", "fixture\n")
+        cancel = threading.Event()
+
+        def cancel_after_worker_starts():
+            wait_until(lambda: (root / "data" / "worker.json").exists())
+            cancel.set()
+
+        thread = threading.Thread(target=cancel_after_worker_starts, daemon=True)
+        thread.start()
+        result, launched, _ = self.start_fake(root, cancel=cancel)
+        thread.join(timeout=1)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(result, 1)
+        self.assertEqual(launched[0].wait(timeout=5), 0)
+        self.assertFalse(is_locked(root / "data" / "worker.lock"))
+        self.assertEqual((root / "data" / "worker.closed").read_text(), "closed\n")
+        self.assertEqual(service.status(root), {"running": False, "ready": False})
 
     def test_status_ignores_stale_pid_records_and_uses_the_lock(self):
         root = self.root_folder()
         write_json(root / "data" / "service.json", {"pid": 12345})
-        self.assertEqual(service.status(root), {"running": False})
+        self.assertEqual(service.status(root), {"running": False, "ready": False})
         with FileLock(root / "data" / "service.lock"):
-            self.assertEqual(service.status(root), {"running": True, "pid": 12345})
+            self.assertEqual(service.status(root), {"running": True, "ready": False, "pid": 12345})
         self.assertEqual(service.stop(root), 0)
         self.assertFalse((root / "data" / "stop.request").exists())
 
@@ -214,6 +273,23 @@ class ServiceTests(unittest.TestCase):
                 service.supervise(root)
         popen.assert_not_called()
         self.assertEqual(read_json(root / "data" / "service.json"), {"pid": 12345})
+
+    def test_losing_supervisor_signal_cannot_stop_the_current_owner(self):
+        root = self.root_folder()
+        write_json(root / "data" / "service.json", {"pid": 12345})
+
+        def lock_after_signal(path):
+            signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+            return FileLock(path)
+
+        with FileLock(root / "data" / "service.lock"), \
+                patch.object(service, "FileLock", side_effect=lock_after_signal), \
+                patch.object(service.subprocess, "Popen") as popen:
+            with self.assertRaises(RuntimeError):
+                service.supervise(root)
+        popen.assert_not_called()
+        self.assertEqual(read_json(root / "data" / "service.json"), {"pid": 12345})
+        self.assertFalse((root / "data" / "stop.request").exists())
 
     def completed_workers(self, root, codes):
         workers = []

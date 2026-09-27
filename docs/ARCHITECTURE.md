@@ -1,4 +1,4 @@
-# Architecture de Vibe Claw Light v0.2
+# Architecture de Vibe Claw Light v0.3
 
 Le programme Python reçoit les messages d'un compte Telegram associé, appelle Codex CLI ou Claude Code et renvoie la réponse. La couche Telegram, le superviseur et le setup sont propres à ce starter. Les CLI conservent la conversation et gèrent leur contexte.
 
@@ -62,7 +62,13 @@ Le setup ouvre une page locale sur `127.0.0.1`, avec une adresse de session priv
 
 Si le CLI n'est pas connecté, le setup lance `codex login` ou `claude auth login` dans un terminal interactif. Il utilise celui de l'installation si possible, sinon ouvre une fenêtre locale. Le navigateur du fournisseur et le terminal traitent la connexion, y compris un éventuel code à recopier. Notre page ne reçoit aucun mot de passe ni code OAuth. Si aucune fenêtre ne peut être ouverte, elle affiche la commande à lancer manuellement, puis permet de revérifier la connexion.
 
-Le diagnostic `doctor --live` demande une petite réponse au moteur réellement connecté. L'installateur le lance avant le démarrage du service. Les parcours testés et leurs limites figurent dans [VALIDATION.md](VALIDATION.md) ; un test simulé ne valide pas une connexion neuve sur Windows.
+Après l'association, le setup conserve sa page ouverte. Il exécute le diagnostic, affiche chaque contrôle puis démarre le service. La phase `ready` n'est atteinte que lorsque les vérifications ont réussi et que le service signale être prêt. Les actions `retry` et `edit-config` permettent de reprendre après un échec. La page distingue l'association Telegram, le test modèle et le démarrage effectif.
+
+Le module `diagnostics.py` sert à la page et à `doctor`. Il distingue les catégories d'erreurs Telegram et réessaie brièvement les erreurs récupérables, avec annulation et attente bornée. Un prérequis en erreur diffère le test modèle. Celui-ci crée un fichier temporaire distinct des documents utilisateur et conserve un succès pendant quinze minutes, sous une empreinte de la configuration contrôlée. Une reprise revérifie les prérequis avant de réutiliser ce succès. `doctor` seul n'appelle pas le modèle ; `doctor --live` peut utiliser ce cache. Ces deux commandes ne démarrent pas le service.
+
+Les formulaires passent par les contrôles Host, Origin, chemin privé et CSRF. `Referrer-Policy: same-origin` permet au navigateur d'envoyer l'origine locale pour ses POST, sans partager l'adresse avec un autre site. Un formulaire périmé reçoit une erreur expliquée ; une réponse à un ancien chemin ne divulgue pas le nouveau chemin privé. Les tests Playwright optionnels soumettent les vrais formulaires sans ajouter d'en-tête Origin.
+
+Les parcours testés et leurs limites figurent dans [VALIDATION.md](VALIDATION.md). Les tests navigateur utilisent un serveur HTTP réel et des moteurs et bots fictifs : ils ne valident pas une authentification neuve ni un envoi Telegram réel.
 
 ## État local
 
@@ -84,8 +90,8 @@ Les données internes privées sont exclues de Git. Les documents rangés hors d
 
 `start` lance le superviseur. `/stop` interrompt la tâche et met la file en pause ; `/continue` ou un nouveau message reprend la file. `/clear` oublie les identifiants de conversation et conserve les souvenirs. `/reload` recharge le code en conservant sessions et mémoire. La commande locale `stop` arrête le service entier.
 
-Un oubli de mémoire invalide aussi les références aux deux sessions pour ne pas repartir avec leur ancien contexte. Cela n'efface ni Telegram ni les historiques des fournisseurs. Un changement des dossiers autorisés, du mode d'accès ou du socle de règles natives repart également avec de nouvelles sessions. Une empreinte des règles permet de détecter cette dernière situation au redémarrage. Les changements du profil, de SOUL.md et des souvenirs sont transmis par le snapshot, sans réinitialiser la conversation.
-
-Le runtime garde aussi l'empreinte du socle natif. Si `instructions.txt` ou le protocole de mémoire change, le prochain rechargement ouvre de nouvelles sessions pour que les deux moteurs prennent les nouvelles règles en compte. Une modification du nom, de `SOUL.md` ou des souvenirs actualise seulement le snapshot, sans perdre la session en cours.
+Un oubli de mémoire invalide aussi les références aux deux sessions pour ne pas repartir avec leur ancien contexte. Cela n'efface ni Telegram ni les historiques des fournisseurs. Un changement des dossiers autorisés ou du mode d'accès ouvre également de nouvelles sessions. Le runtime garde une empreinte des règles natives : si `instructions.txt` ou le protocole de mémoire change, le prochain rechargement ouvre de nouvelles sessions avec ces règles. Une modification du nom, de `SOUL.md` ou des souvenirs actualise seulement le snapshot, sans perdre la conversation en cours.
 
 Les configurations v0.1 sans `ACCESS_MODE` restent en mode `workspace`, avec leur dossier et leur choix de commandes Claude. Mettre à jour le code n'élargit pas leurs accès. Le programme n'installe pas de mise à jour distante automatique ni de retour automatique à une ancienne version du code.
+
+`/switch` bascule vers un moteur déjà installé et connecté. S'il manque, le bot fournit les instructions pour le préparer dans l'installation existante depuis un assistant local ; aucune installation silencieuse n'est déclenchée dans le listener. Voir [MOTEURS.md](MOTEURS.md).

@@ -1,10 +1,10 @@
 # Démo finale : un assistant qui retrouve son travail
 
-Prévoir 10 à 15 minutes de démonstration après l'installation de la v0.2.0. Les participants choisissent leur moteur ; un compte Codex ou Claude Code compatible suffit.
+Prévoir 10 à 15 minutes de démonstration après l'installation de la v0.3.0. Les participants choisissent leur moteur ; un compte Codex ou Claude Code compatible suffit.
 
 ## Préparer avant la séance
 
-- Tester la release sur la machine de présentation avec le moteur choisi et `doctor --live`.
+- Terminer la page d'installation sur la machine de présentation : Telegram associé, modèle testé et service démarré. Un diagnostic déjà réussi depuis moins de quinze minutes peut être réutilisé avec la même configuration.
 - Vérifier l'échange Telegram réel, `/stop`, `/clear` et `/reload` avant de présenter ces commandes.
 - Copier `examples/Atelier` dans le dossier de rangement proposé, `Documents/MonAssistant` par défaut, puis créer `Atelier/livrables`. Les trois fichiers fournis dans `sources` sont fictifs et peuvent être montrés en public.
 - Garder l'ordinateur sur secteur, connecté et hors veille. Vérifier le quota du compte.
@@ -66,7 +66,9 @@ Relire le petit changement. Envoyer `/reload`, attendre la confirmation de retou
 
 ## Si l'installation d'un participant bloque
 
-Si le fournisseur demande de recopier un code de connexion, utiliser le terminal interactif ouvert par le setup. Si aucune fenêtre ne s'ouvre, lancer la commande affichée dans un terminal du PC, puis revérifier depuis la page. Ne jamais faire dicter ou publier un code de connexion, un token ou un lien d'association pendant la séance.
+Si le fournisseur demande de recopier un code de connexion, utiliser le terminal interactif ouvert par le setup. Si aucune fenêtre ne s'ouvre, lancer la commande affichée dans un terminal du PC, puis attendre la détection ou revérifier depuis la page. Ne jamais faire dicter ou publier un code de connexion, un token ou un lien d'association pendant la séance.
+
+Une association Telegram réussie ne signifie pas encore que le bot tourne. Garder la page ouverte pendant les diagnostics et le démarrage. En cas de problème, utiliser sa reprise ; ne pas recommencer toute l'installation ni répéter un test modèle déjà réussi. `bienvenue.txt` doit être demandé dans Telegram et sa pièce jointe vérifiée : il ne fait pas partie du diagnostic préparatoire.
 
 Poursuivre la démo sur l'installation déjà prête. Le participant conserve le prompt et la documentation de diagnostic pour terminer ensuite. Ne lui faire créer aucun compte payant dans l'urgence.
 
@@ -78,5 +80,6 @@ Si la connexion du moteur de présentation tombe, montrer le compte rendu déjà
 - Un bot personnel relié à leur moteur et aux dossiers autorisés, pour ceux dont le setup est terminé.
 - Un exemple de projet rangé avec ses sources et ses livrables.
 - Les commandes pour inspecter et corriger la mémoire, redémarrer et arrêter le service.
+- `/switch` et le [guide des moteurs](MOTEURS.md) pour ajouter l'autre moteur plus tard sans recréer le bot.
 
 Pour une séance suivante : exploitation de documents complexes, connexions à d'autres outils, tâches planifiées et usages plus autonomes. Ils ne sont pas inclus dans cette première démo.

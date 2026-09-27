@@ -13,11 +13,12 @@ import time
 from urllib.parse import parse_qs, urlsplit
 import webbrowser
 
-from .auth import LoginAttempt, manual_command, start_login
+from .auth import LoginAttempt, start_login
 from .config import read_values, save_config
 from .providers import auth_status, executable_command, find_cli
+from .setup_ui import page
 from .storage import FileLock, atomic_write, is_locked, write_json
-from .telegram import Telegram, TelegramError
+from .telegram import Telegram, TelegramError, retry_telegram
 
 
 SETUP_TIMEOUT = 20 * 60
@@ -49,7 +50,8 @@ class Wizard:
     """État testable indépendamment du serveur HTTP et des appels réels."""
 
     def __init__(self, root: Path, provider: str, executable: str,
-                 authenticated: bool, telegram_factory=Telegram):
+                 authenticated: bool, telegram_factory=Telegram, *,
+                 diagnostic_runner=None, service_start=None, service_status=None):
         self.root, self.provider, self.executable = root, provider, executable
         self.initial = read_values(root)
         self.telegram_factory = telegram_factory
@@ -73,6 +75,26 @@ class Wizard:
         self.auth_generation = 0
         self.checking_login = False
         self.result = 1
+        self.diagnostic_runner = diagnostic_runner
+        self.service_start = service_start
+        self.service_status = service_status
+        self.checks = {}
+        self.service_state = "pending"
+        self.auth_watch_deadline = 0.0
+        self.auth_next_check = 0.0
+
+    def enable_login_watch(self):
+        self.auth_watch_deadline = time.monotonic() + AUTH_TIMEOUT
+
+    def refresh_login(self):
+        """Lecture bornée de l'état du CLI, y compris après un login manuel."""
+        with self.lock:
+            now = time.monotonic()
+            if (self.phase not in {"auth", "authenticating"} or self.checking_login
+                    or not now < self.auth_watch_deadline or now < self.auth_next_check):
+                return
+            self.auth_next_check = now + 5
+            self.check_login(automatic=True)
 
     def _thread(self, target, *args):
         thread = threading.Thread(target=target, args=args, daemon=True)
@@ -84,6 +106,7 @@ class Wizard:
             if self.phase != "auth" or self.auth_attempt is not None:
                 return
             self.phase, self.error = "authenticating", ""
+            self.enable_login_watch()
             self.auth_generation += 1
             self._thread(self._login, self.auth_generation)
 
@@ -131,22 +154,27 @@ class Wizard:
                 if self.auth_attempt is attempt:
                     self.auth_attempt = None
 
-    def check_login(self):
+    def check_login(self, automatic=False):
         with self.lock:
             if self.phase not in {"auth", "authenticating"} or self.checking_login:
                 return
             self.checking_login = True
-            self.phase, self.error = "authenticating", ""
-            self._thread(self._check_login, self.auth_generation)
+            if not automatic:
+                self.phase, self.error = "authenticating", ""
+                self.enable_login_watch()
+            self._thread(self._check_login, self.auth_generation, automatic)
 
-    def _check_login(self, generation: int):
+    def _check_login(self, generation: int, automatic=False):
         valid, _ = auth_status(self.provider, self.executable)
         with self.lock:
             self.checking_login = False
             if self.stop.is_set() or generation != self.auth_generation:
                 return
             self.phase = "configure" if valid else ("authenticating" if self.auth_attempt else "auth")
-            self.error = "" if valid else "Connexion non détectée. Terminez la connexion puis réessayez."
+            if valid:
+                self.error = ""
+            elif not automatic:
+                self.error = "Connexion non détectée. Terminez la connexion puis réessayez."
             if valid:
                 self.auth_generation += 1
                 if self.auth_attempt:
@@ -157,6 +185,7 @@ class Wizard:
             if self.phase != "authenticating":
                 return
             self.auth_generation += 1
+            self.auth_watch_deadline = 0
             self.phase, self.error = "auth", "Connexion annulée. Vous pourrez la relancer ou la vérifier."
             if self.auth_attempt:
                 self.auth_attempt.cancel()
@@ -220,12 +249,12 @@ class Wizard:
     def _validate_and_pair(self, updates: dict[str, str], keep_owner: bool, generation: int):
         try:
             telegram = self.telegram_factory(updates["TELEGRAM_TOKEN"])
-            me = telegram.get_me()
+            me = retry_telegram(telegram.get_me, cancel=self.stop)
             username = me.get("username", "")
             if not me.get("is_bot") or not re.fullmatch(r"[A-Za-z0-9_]{5,64}", username):
                 self._fail(generation, "Ce token ne correspond pas à un bot Telegram utilisable.")
                 return
-            webhook = telegram.request("getWebhookInfo")
+            webhook = retry_telegram(lambda: telegram.request("getWebhookInfo", timeout=8), cancel=self.stop)
             if webhook.get("url"):
                 self._fail(generation, "Ce bot est déjà relié à un autre service par un webhook. Créez un bot dédié avec BotFather ; l'association existante a été conservée.")
                 return
@@ -248,10 +277,17 @@ class Wizard:
                 try:
                     batch = telegram.updates(offset=offset, timeout=5)
                 except TelegramError as exc:
-                    if exc.code in {0, 429}:
-                        self.stop.wait(min(max(exc.retry_after, 1), 5))
+                    remaining = deadline - time.monotonic()
+                    if exc.retryable and max(exc.retry_after, 1) < remaining:
+                        with self.lock:
+                            if self._current(generation):
+                                self.error = str(exc) + " Nouvelle tentative en cours."
+                        self.stop.wait(max(exc.retry_after, 1))
                         continue
                     raise
+                with self.lock:
+                    if self._current(generation):
+                        self.error = ""
                 for update in batch:
                     if not isinstance(update, dict):
                         continue
@@ -271,7 +307,7 @@ class Wizard:
                 401: "Telegram a refusé ce token. Copiez à nouveau celui de BotFather.",
                 409: "Un autre programme utilise déjà ce bot. Arrêtez cet autre programme ou créez un bot dédié.",
             }
-            self._fail(generation, messages.get(exc.code, "Telegram est indisponible pour le moment. Vérifiez votre connexion puis réessayez."))
+            self._fail(generation, messages.get(exc.code, str(exc)))
         except (OSError, ValueError, TypeError, KeyError, RuntimeError):
             # Ne jamais afficher une exception contenant une URL API et son token.
             self._fail(generation, "L'association n'a pas pu être enregistrée. Vérifiez les droits d'accès au dossier puis réessayez.")
@@ -306,9 +342,70 @@ class Wizard:
                         "offset": next_offset, "sessions": {}, "queue": [], "active": None, "paused": False,
                     })
                 save_config(self.root, updates)
-            self.phase, self.result = "done", 0
+            self.initial = read_values(self.root)
+            self.phase, self.error = "diagnostics", ""
             self.pair_code = self.pair_link = ""
-            self.done.set()
+            self._thread(self._prepare, generation)
+
+    def _prepare(self, generation: int):
+        from .diagnostics import run_diagnostics
+        from . import service
+
+        def report(check):
+            with self.lock:
+                if self._current(generation):
+                    self.checks[check.id] = check
+
+        try:
+            runner = self.diagnostic_runner or run_diagnostics
+            result = runner(self.root, live=True, report=report, cancel=self.stop)
+            with self.lock:
+                if not self._current(generation):
+                    return
+                if not result.ok:
+                    self.phase = "blocked"
+                    self.error = "Une étape reste à terminer. Corrigez le point indiqué, puis réessayez ici."
+                    return
+                self.phase, self.service_state = "starting", "running"
+            start = self.service_start or service.start
+            status = self.service_status or service.status
+            started = start(self.root, cancel=self.stop)
+            state = status(self.root)
+            with self.lock:
+                if not self._current(generation):
+                    return
+                if started != 0 or not (state.get("running") and state.get("ready")):
+                    self.phase, self.service_state = "blocked", "error"
+                    self.error = "Le service n’a pas démarré correctement. Les réglages sont enregistrés. Réessayez ; le test modèle déjà réussi sera réutilisé pendant quinze minutes."
+                    return
+                self.phase, self.service_state, self.result = "ready", "ok", 0
+                self.done.set()
+        except Exception:
+            # Aucun détail brut : une exception réseau peut contenir un token.
+            with self.lock:
+                if self._current(generation):
+                    if self.phase == "starting":
+                        self.service_state = "error"
+                    self.phase = "blocked"
+                    self.error = "La vérification a été interrompue. Vos réglages sont enregistrés ; vous pouvez réessayer."
+
+    def retry(self):
+        with self.lock:
+            if self.phase != "blocked":
+                return
+            self.phase, self.error, self.service_state = "diagnostics", "", "pending"
+            self.generation += 1
+            self._thread(self._prepare, self.generation)
+
+    def edit_config(self):
+        with self.lock:
+            if self.phase != "blocked":
+                return
+            if is_locked(self.root / "data" / "service.lock"):
+                self.error = "Le service est déjà actif. Arrêtez cette instance avec python run.py stop avant de modifier sa configuration."
+                return
+            self.generation += 1
+            self.phase, self.error = "configure", ""
 
     def cancel_pairing(self):
         with self.lock:
@@ -325,67 +422,16 @@ class Wizard:
             attempt = self.auth_attempt
         if attempt is not None:
             attempt.cancel()
+        # Laisser les opérations annulées arrêter leurs propres enfants avant
+        # la sortie de Python, notamment pendant le lancement du service.
+        deadline = time.monotonic() + 35
         for thread in self.threads:
-            thread.join(timeout=0.3)
+            thread.join(timeout=max(0, deadline - time.monotonic()))
 
     def render(self) -> bytes:
+        from .setup_ui import render_wizard
         with self.lock:
-            e = escape
-            hidden = f'<input type="hidden" name="csrf" value="{e(self.csrf)}">'
-            def form(action, contents):
-                return f'<form method="post" action="{e(self.path + action)}">{hidden}{contents}</form>'
-            refresh = self.phase in {"authenticating", "validating", "pairing"}
-            body = '<p class="eyebrow">Vibe Claw Light · Installation locale</p>'
-            if self.error:
-                body += f'<p role="alert" class="error">{e(self.error)}</p>'
-            if self.phase == "auth":
-                login_command = manual_command(self.provider, self.executable)
-                body += f'<h1>Connectez {e(self.provider)}</h1><p>Utilisez le compte dont vous souhaitez employer l’abonnement. Seul ce moteur sera configuré.</p>'
-                body += '<p>La connexion se déroule dans un terminal et sur le site officiel. Si le moteur demande de recopier un code, collez-le dans ce terminal.</p>'
-                body += form("login", '<button>Ouvrir le terminal de connexion</button>')
-                body += '<p>Vous pouvez aussi ouvrir un terminal sur ce PC' + (' (PowerShell)' if os.name == 'nt' else '') + f', y lancer <code>{e(login_command)}</code>, puis revenir ici.</p>'
-                body += form("check-login", '<button class="secondary">J’ai terminé la connexion, vérifier</button>')
-            elif self.phase == "authenticating":
-                body += '<h1>Connexion en cours</h1><p>Terminez la connexion dans le terminal de l’installation ou la nouvelle fenêtre ouverte. Le moteur peut ouvrir son site officiel et vous demander de recopier un code dans le terminal. Cette page ne reçoit aucun mot de passe ni code de connexion.</p><p>La page se met à jour automatiquement. Vous pouvez aussi vérifier la connexion dès qu’elle est terminée.</p>'
-                body += form("check-login", '<button>J’ai terminé la connexion, vérifier</button>')
-                body += form("cancel-login", '<button class="secondary">Annuler la connexion</button>')
-            elif self.phase == "configure":
-                existing = bool(self.initial["TELEGRAM_TOKEN"])
-                body += '<h1>Votre assistant</h1><p>Ces informations restent sur ce PC. Le token est enregistré dans votre fichier privé <code>config.env</code>.</p>'
-                fields = f'<label>Nom de l’assistant<input name="name" maxlength="80" required value="{e(self.name, quote=True)}"></label>'
-                fields += f'<label>Dossier où ranger les nouveaux travaux<input name="workspace" required value="{e(self.workspace, quote=True)}" spellcheck="false"></label><p class="hint">L’assistant y range ses nouveaux documents. Vous pourrez aussi lui parler de projets placés ailleurs selon le mode d’accès choisi ci-dessous.</p>'
-                fields += '<label>Accès de l’assistant<select name="access_mode">'
-                for mode, label in (("personal", "Assistant personnel"), ("workspace", "Limité aux dossiers choisis")):
-                    selected = ' selected' if self.access_mode == mode else ''
-                    fields += f'<option value="{mode}"{selected}>{label}</option>'
-                fields += '</select></label><p class="hint">Assistant personnel : vos documents et projets dans votre dossier utilisateur, les commandes et Internet, avec les droits normaux de votre compte. Le dossier de rangement reste celui indiqué ci-dessus. Mode limité : le dossier du starter, le dossier de rangement et les éventuels dossiers supplémentaires configurés.</p>'
-                fields += '<p>Dans Telegram, ouvrez <a href="https://t.me/BotFather" target="_blank" rel="noreferrer noopener">BotFather</a>, choisissez <code>/newbot</code>, puis copiez le token fourni ci-dessous.</p>'
-                fields += '<label>Token du bot Telegram<input type="password" name="token" autocomplete="new-password" spellcheck="false"' + ('' if existing else ' required') + '></label>'
-                if existing:
-                    fields += '<p class="hint">Un token est déjà enregistré. Laissez ce champ vide pour le conserver.</p>'
-                owner, chat = self.initial["TELEGRAM_OWNER_ID"], self.initial["TELEGRAM_CHAT_ID"]
-                if existing and owner.isdecimal() and int(owner) > 0 and owner == chat:
-                    fields += '<label class="check"><input type="checkbox" name="keep_owner" value="1" checked>Conserver l’association Telegram existante si le token reste le même.</label>'
-                if self.provider == "claude":
-                    checked = ' checked' if self.allow_shell else ''
-                    fields += f'<label class="check"><input type="checkbox" name="allow_shell" value="1"{checked}>En mode limité, autoriser aussi les commandes Claude.</label><p class="hint">En mode personnel, les commandes sont déjà activées. Les autorisations Claude ne constituent pas une sandbox système Windows.</p>'
-                fields += '<button>Vérifier et associer Telegram</button>'
-                body += form("configure", fields)
-            elif self.phase == "validating":
-                body += '<h1>Vérification du bot</h1><p>Connexion à Telegram en cours. Aucun changement de configuration n’est encore enregistré.</p>'
-                body += form("cancel", '<button class="secondary">Revenir au formulaire</button>')
-            elif self.phase == "pairing":
-                body += f'<h1>Associez votre Telegram</h1><p>Ouvrez ce lien avec votre compte personnel, puis appuyez sur <strong>Démarrer</strong> dans la conversation privée de votre bot.</p><p><a class="button" href="{e(self.pair_link, quote=True)}" target="_blank" rel="noreferrer noopener">Ouvrir @{e(self.bot_username)} dans Telegram</a></p><p>Sur un autre appareil, ouvrez ce même lien :</p><p class="link">{e(self.pair_link)}</p><p class="hint">Le lien expire après cinq minutes. Gardez-le pour vous : il associe votre compte à cet assistant. Cette page se met à jour automatiquement.</p>'
-                body += form("cancel", '<button class="secondary">Revenir au formulaire</button>')
-            else:
-                body += f'<h1>{e(self.name)} est configuré</h1><p>Votre bot <a href="https://t.me/{e(self.bot_username)}" target="_blank" rel="noreferrer noopener">@{e(self.bot_username)}</a> est associé à votre compte.</p><p>Le service n’est pas encore démarré. Si vous avez utilisé l’installateur, il poursuit automatiquement avec la vérification puis le démarrage après ce formulaire. Le test réel utilise votre quota.</p>'
-                body += form("finish", '<button>Terminer et continuer l’installation</button>')
-                body += '<details><summary>J’ai lancé setup seul, sans l’installateur</summary><p>Retournez dans Codex ou Claude Code et demandez de continuer avec :</p><ol><li><code>python run.py doctor --live</code> pour vérifier une vraie action.</li><li><code>python run.py start</code> pour démarrer l’assistant en arrière-plan.</li></ol></details><p>Ensuite, écrivez-lui sur Telegram. Le PC doit rester allumé et connecté.</p>'
-            html = '<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
-            if refresh:
-                html += '<meta http-equiv="refresh" content="2">'
-            html += '<title>Configurer votre assistant</title><style>body{font:17px/1.55 system-ui,sans-serif;background:#f5f4f0;color:#232323;margin:0;padding:32px 16px}main{max-width:650px;margin:auto;background:white;padding:32px;border-radius:14px}h1{line-height:1.2;font-size:32px}.eyebrow,.hint{color:#60605d}.eyebrow{font-size:14px}label{display:block;margin:22px 0 8px;font-weight:600}select,input:not([type=checkbox]):not([type=hidden]){display:block;box-sizing:border-box;width:100%;font:inherit;padding:12px;border:1px solid #a5a5a0;border-radius:6px;margin-top:6px}button,.button{display:inline-block;background:#252b28;color:white;border:0;border-radius:6px;padding:12px 18px;font:inherit;cursor:pointer;text-decoration:none;margin-top:14px}.secondary{background:#eee;color:#222}.error{padding:14px;background:#fff0df;color:#7b3f00}.hint{font-size:14px}.check{font-weight:400}.check input{margin-right:8px}code{font-size:.9em;background:#f2f2ed;padding:2px 5px}.link{overflow-wrap:anywhere}a{color:#235942}li{margin:12px 0}</style></head><body><main>'
-            return (html + body + '</main></body></html>').encode("utf-8")
+            return render_wizard(self)
 
 
 class WizardServer(ThreadingHTTPServer):
@@ -417,7 +463,7 @@ class WizardHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
-        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Referrer-Policy", "same-origin")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
@@ -427,17 +473,31 @@ class WizardHandler(BaseHTTPRequestHandler):
         if data:
             self.wfile.write(data)
 
+    def _error(self, code: int, message: str):
+        # Le nouveau chemin privé ne doit jamais être révélé à un ancien onglet
+        # ou à une requête venue d'une autre origine.
+        trusted = (self.headers.get("Host") == self.server.host
+                   and self.headers.get("Origin") in {None, self.server.origin}
+                   and self.headers.get("Sec-Fetch-Site") != "cross-site"
+                   and self.path.startswith(self.server.wizard.path))
+        body = f'<h1>Revenons à l’installation.</h1><p class="intro">{escape(message)}</p>'
+        if trusted:
+            body += f'<a class="button primary" href="{escape(self.server.wizard.path)}">Revenir à l’installation</a>'
+        else:
+            body += '<p>Utilisez la dernière page ouverte par l’installateur ou l’adresse affichée dans son terminal. Cet onglet peut appartenir à une installation précédente.</p>'
+        self._send(code, page(body))
+
     def _allowed(self, post=False) -> bool:
         origin = self.headers.get("Origin")
         if (self.headers.get("Host") != self.server.host
                 or (post and origin != self.server.origin)
                 or (origin is not None and origin != self.server.origin)
                 or self.headers.get("Sec-Fetch-Site") == "cross-site"):
-            self._send(403, b"Acces refuse.")
+            self._error(403, "Cette demande n’a pas pu être validée. Aucun réglage n’a été modifié.")
             return False
         parts = urlsplit(self.path)
         if parts.scheme or parts.netloc or parts.query or parts.fragment:
-            self._send(404, b"Page introuvable.")
+            self._error(404, "Cette page d’installation n’est plus active.")
             return False
         return True
 
@@ -445,8 +505,9 @@ class WizardHandler(BaseHTTPRequestHandler):
         if not self._allowed():
             return
         if self.path != self.server.wizard.path:
-            self._send(404, b"Page introuvable.")
+            self._error(404, "Cette page d’installation n’est plus active.")
             return
+        self.server.wizard.refresh_login()
         self._send(200, self.server.wizard.render())
 
     def do_POST(self):
@@ -466,14 +527,14 @@ class WizardHandler(BaseHTTPRequestHandler):
         if not self._allowed(post=True):
             return
         wizard = self.server.wizard
-        actions = {"login", "check-login", "cancel-login", "configure", "cancel", "finish"}
+        actions = {"login", "check-login", "cancel-login", "configure", "cancel", "retry", "edit-config", "finish"}
         action = self.path[len(wizard.path):] if self.path.startswith(wizard.path) else ""
         if action not in actions:
-            self._send(404, b"Page introuvable.")
+            self._error(404, "Cette page d’installation n’est plus active.")
             return
         if (self.headers.get_content_type() != "application/x-www-form-urlencoded"
                 or self.headers.get("Transfer-Encoding") or raw is None):
-            self._send(400, b"Formulaire invalide.")
+            self._error(400, "Le formulaire n’a pas pu être lu. Revenez à la page pour réessayer.")
             return
         try:
             fields = parse_qs(raw.decode("utf-8"), keep_blank_values=True, max_num_fields=12)
@@ -481,10 +542,10 @@ class WizardHandler(BaseHTTPRequestHandler):
                 raise ValueError
             fields = {key: value[0] for key, value in fields.items()}
         except (UnicodeError, ValueError):
-            self._send(400, b"Formulaire invalide.")
+            self._error(400, "Le formulaire n’a pas pu être lu. Revenez à la page pour réessayer.")
             return
         if not secrets.compare_digest(fields.pop("csrf", "").encode("utf-8"), wizard.csrf.encode("utf-8")):
-            self._send(403, b"Acces refuse.")
+            self._error(403, "Ce formulaire a expiré ou appartient à une ancienne page. Aucun réglage n’a été modifié.")
             return
         if action == "login":
             wizard.login()
@@ -496,8 +557,12 @@ class WizardHandler(BaseHTTPRequestHandler):
             wizard.configure(fields)
         elif action == "cancel":
             wizard.cancel_pairing()
-        elif action == "finish" and wizard.phase == "done":
-            self._send(200, b"Configuration terminee. Vous pouvez fermer cet onglet et revenir a Codex ou Claude Code.")
+        elif action == "retry":
+            wizard.retry()
+        elif action == "edit-config":
+            wizard.edit_config()
+        elif action == "finish" and wizard.phase == "ready":
+            self._send(200, page('<h1>À vous de jouer.</h1><p class="intro">L’assistant tourne en arrière-plan. Vous pouvez fermer cet onglet et lui écrire dans Telegram.</p><p>Gardez le PC allumé et connecté.</p>'))
             wizard.stop.set()
             return
         self._send(303, location=wizard.path)
@@ -523,6 +588,7 @@ def setup(root: Path, provider: str | None = None) -> int:
             executable_command(executable)
             authenticated, _ = auth_status(provider, executable)
             wizard = Wizard(root, provider, executable, authenticated)
+            wizard.enable_login_watch()
             server = WizardServer(wizard)
             server.timeout = 0.25
             print("Configuration dans votre navigateur. Saisissez le token Telegram uniquement dans le formulaire local.", flush=True)
@@ -538,7 +604,7 @@ def setup(root: Path, provider: str | None = None) -> int:
                 if wizard.done.is_set():
                     if completed_at is None:
                         completed_at = time.monotonic()
-                        print("Configuration enregistrée. Terminez dans le navigateur ; l'installateur poursuit automatiquement. Si setup a été lancé seul : python run.py doctor --live puis python run.py start.", flush=True)
+                        print("Assistant prêt : Telegram associé, modèle testé, service démarré. Vous pouvez lui écrire dans Telegram.", flush=True)
                     # Laisser le navigateur charger la page finale sans garder
                     # le terminal occupé si l'utilisateur ferme son onglet.
                     if time.monotonic() - completed_at > 20:

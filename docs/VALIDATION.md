@@ -1,31 +1,47 @@
-# Vérifications de la version 0.2.0
+# Vérifications de la version 0.3.0
 
-Préparation du 27 septembre 2026. Ces vérifications concernent le code du starter ; l'accès au modèle dépend du compte utilisé.
+Préparation du 27 septembre 2026. Les tests du programme, les navigateurs réels et les comptes de modèles sont distingués ci-dessous.
 
-## Vérifications locales
+## Défauts reproduits et corrigés
+
+Le formulaire v0.2.0 envoyait `Referrer-Policy: no-referrer` tout en exigeant l'origine locale pour ses POST. Des clics dans Chromium et Edge ont reproduit `Origin: null`, puis le refus 403. La nouvelle politique `same-origin` permet ces soumissions sans retirer les contrôles Host, Origin, chemin privé et CSRF. Un test témoin conserve l'ancienne politique pour vérifier que le navigateur reproduit toujours le défaut initial.
+
+L'héritage de modules PowerShell 7 incompatibles empêchait Windows PowerShell 5.1 de trouver `Get-FileHash`. Les tests reproduisent cet environnement, puis vérifient la commande dans le véritable processus enfant après isolation du chemin des modules. Aucun profil ni paramètre système permanent n'est modifié.
+
+## Vérifications effectuées
 
 | Vérification | Environnement et résultat |
 | --- | --- |
-| Suite automatisée | 136 tests découverts. Deux sont réservés à Windows et trois aux terminaux POSIX ; les autres s'exécutent sur les trois OS. |
-| Windows natif | Windows 11 Professionnel, Python 3.11.7, PowerShell 5.1.26100.9444 ; copie temporaire avec espaces et accent. Processus, verrous et ouverture d'une console de connexion réels. Syntaxe de `install.ps1` vérifiée. |
-| Connexion interactive | Faux CLI qui demande un code : vrais terminaux POSIX, saisie via `/dev/tty`, annulation et timeout. Sous Windows, une vraie nouvelle console vérifie stdin/stdout puis son annulation. Aucun compte fournisseur utilisé dans ces tests. |
-| Codex réel | Codex CLI 0.153.4 sous Linux : création d'un fichier, reprise de session, souvenir corrigé pris en compte, tour sans changement plus court et lecture du snapshot lorsqu'il manque au contexte. |
-| Claude réel | Claude Code 2.1.281 sous Linux : mêmes vérifications, avec l'authentification déjà enregistrée. |
-| Consolidation réelle | Débordement du budget de 8 000 caractères avec 21 notes fictives : les deux CLI ont produit une condensation acceptée. Ajout conservé et tous les textes sources préservés. Contexte final : 6 135 caractères avec Codex, 6 093 avec Claude. |
-| Distribution | Construction du paquet source et du wheel. Configuration, conversations, identité, mémoire et documents privés exclus des archives. |
+| Suite locale | 196 tests découverts sous Linux ; 176 exécutés avec succès, 20 ignorés car réservés à Windows ou aux navigateurs optionnels. |
+| Navigateur Linux | 12 tests réussis dans Chromium 149.0.7827.55 avec Playwright 1.63.0. Vrai serveur HTTP et vrais clics, sans fabriquer l'en-tête Origin. |
+| Navigateur Windows | Les mêmes 12 tests réussis dans Edge 154.0.4258.37 sur Windows natif, depuis une copie temporaire des sources publiques. |
+| Formulaires | Connexion, vérification et détection automatique d'un login manuel, annulation, configuration, association, reprise après erreur, modification des réglages, démarrage et fin. Ancien onglet après redémarrage du serveur, CSRF incorrect et absence de token dans le HTML également vérifiés. |
+| Installateur Windows | 6 tests réussis sous Windows PowerShell 5.1.26100.9444 et PowerShell 7.6.5, dont PS7 → cmd → PS5. Enfant PowerShell réel, dépendances et téléchargement simulés. Vérification de Get-FileHash, erreurs expurgées, UTF8, conservation de l'environnement du parent, sélection d'un seul moteur et SkipSetup. |
+| Installateur shell | Test Linux avec dépendances factices : setup porte le diagnostic et le démarrage, sans double appel modèle ; --skip-setup reste disponible. Syntaxe Bash vérifiée. |
+| Diagnostics | 21 tests couvrent les prérequis, les erreurs, la reprise, l'expiration et l'invalidation du cache modèle, les changements de moteur/configuration, l'annulation et le verrou empêchant deux tests simultanés. |
+| Erreurs Telegram | 8 tests couvrent DNS, TLS, délai, réseau, réponses HTTP, limitation, réponses invalides, réessais bornés et expurgation des erreurs. |
+| Service | 14 tests, dont de vrais processus temporaires : démarrage confirmé par le worker, rechargement, arrêt, annulation et concurrence. Une tentative annulée ferme ses propres processus. |
+| Réponse et moteurs | Acquittements préfabriqués retirés ; changement de moteur vérifié sans perdre la mémoire, l'association ni les sessions ordinaires. Un moteur absent ou déconnecté laisse la configuration précédente intacte. |
+| Interface | Captures inspectées sur ordinateur et petit écran. Ressources locales uniquement, sans police ni script externe. |
 
-La suite vérifie notamment l'autorisation du compte Telegram, l'association par lien temporaire, les protections du formulaire local, la mémoire et ses corrections, la consolidation bornée, l'oubli pendant une consolidation, la persistance des messages, l'arrêt des processus et la conservation des accès d'une ancienne configuration. Les appels Telegram et les flux des modèles y sont simulés. Les appels réels aux modèles mentionnés ci-dessus ont été effectués séparément.
+Les moteurs, les réponses d'authentification et Telegram restent simulés dans les tests navigateur. Un terminal interactif et une console Windows sont aussi exercés par les tests d'authentification avec un CLI factice demandant une saisie. Cela ne constitue pas une connexion OAuth réelle à un compte neuf.
 
-Dans le scénario de reprise, le message utilisateur fourni au CLI passait d'environ 1 160 caractères avec snapshot à 300 sans changement. Ce sont des caractères du message ajouté, pas la totalité des tokens facturés : les instructions natives et la conversation restent dans le contexte. La récupération du snapshot a été testée dans une session privée de ce bloc ; cela ne constitue pas un test exhaustif des compacteurs internes des fournisseurs.
+Le workflow [Tests](https://github.com/tiasslevo/vibe-claw-light/actions/workflows/tests.yml) exécute la suite, construit le paquet et soumet les formulaires dans Chromium sur Linux, Windows et macOS. Playwright est une dépendance de développement et de CI uniquement ; le runtime reste sans dépendance Python externe.
 
-Les sources de mémoire sont conservées, mais la validation structurelle ne prouve pas l'équivalence sémantique parfaite d'une reformulation. Un échec de consolidation laisse les données existantes en place et signale que l'ajout n'a pas été retenu.
+Les instructions pour lancer les tests navigateur, y compris avec Edge installé sous Windows, figurent en tête de [test_browser.py](../tests/test_browser.py).
 
-Le workflow [Tests](https://github.com/tiasslevo/vibe-claw-light/actions/workflows/tests.yml) exécute aussi la suite et la construction du paquet sur Linux, Windows et macOS à chaque push. Il ne se connecte à aucun compte de modèle ni bot Telegram.
+## Diagnostics avec les modèles réels
 
-## Ce qui reste à répéter avant une présentation
+Codex CLI 0.153.4 et Claude Code 2.1.281 ont chacun exécuté le nouveau diagnostic sous Linux, avec leur authentification existante et une configuration fictive isolée. Chacun a créé le fichier temporaire exact, puis celui-ci a été supprimé. Un seul appel modèle par moteur a été autorisé et effectué.
 
-Le parcours complet avec un bot Telegram neuf n'a pas été exécuté pendant cette préparation. L'installation de toutes les dépendances sur un Windows vierge et la connexion initiale aux fournisseurs restent également à vérifier sur la machine de présentation. Les tests de terminal prouvent la possibilité de saisir un code dans le processus, pas la disponibilité du parcours OAuth d'un compte neuf. Le lanceur Terminal macOS est simulé dans les tests ; aucune connexion réelle sur macOS n'a été effectuée.
+Pour les deux moteurs, le diagnostic suivant a utilisé le cache sans nouvel appel modèle. Une panne Telegram simulée a différé le test ; le retour du réseau simulé a réutilisé le même succès. Les répertoires temporaires ont été nettoyés et aucune session de conversation existante n'a été reprise. Dans cet essai, les CLI et les modèles étaient réels ; Telegram était simulé.
 
-Les installateurs de dépendances n'ont pas changé depuis v0.1.0. Leur précédent test Windows avait créé `.venv` avec Python 3.11.7, uv et Codex déjà disponibles ; il ne prouve pas un parcours à blanc. Les versions de CLI ci-dessus sont celles vérifiées pour v0.2.0 ; utiliser les versions officielles à jour si un CLI ancien refuse une option.
+## Limites de cette validation
 
-Après installation, `doctor --live` vérifie le moteur et la connexion à Telegram. Envoyer ensuite une demande depuis Telegram et vérifier le fichier produit permet de confirmer la chaîne complète. La [démo](DEMO-MASTERCLASS.md) décrit la répétition avec mémoire, nouvelle conversation et rechargement.
+L'installation complète sur un Windows réellement vierge, sans Python, uv, Git, Node, WSL ni CLI, n'a pas été exécutée. Les tests des installateurs valident les processus et l'environnement avec des dépendances factices ; ils ne prouvent pas la disponibilité des téléchargements officiels sur tout réseau.
+
+Le parcours avec un nouveau compte fournisseur, un bot Telegram neuf et la réception d'un document réel n'a pas été répété pour v0.3.0. Une répétition sur la machine de présentation reste nécessaire. La page « prêt » confirme les diagnostics et le démarrage du service ; la demande bienvenue.txt dans Telegram vérifie ensuite la chaîne réelle de bout en bout.
+
+Le cache de succès modèle dure quinze minutes et vérifie à nouveau l'authentification. Son empreinte couvre le moteur, la version du CLI, le modèle, les permissions, les dossiers et les métadonnées de fichiers d'authentification, sans lire leur contenu. Un changement de compte exclusivement enregistré dans le trousseau du système n'est pas identifié de façon garantie par cette empreinte.
+
+Les vérifications réelles de mémoire de v0.2.0 restent distinctes : Codex CLI 0.153.4 et Claude Code 2.1.281 sous Linux avaient créé un fichier, repris une session, pris en compte un souvenir corrigé et condensé 21 notes fictives sous 8 000 caractères en conservant toutes les sources. La validation structurelle d'une condensation ne prouve pas son équivalence sémantique parfaite. La récupération d'un snapshot absent avait été testée, sans prétendre exercer exhaustivement les compacteurs internes des CLI.

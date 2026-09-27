@@ -7,7 +7,7 @@ import threading
 import unittest
 from unittest.mock import patch
 
-from vibe_claw_light.config import Config
+from vibe_claw_light.config import Config, read_values, save_config
 from vibe_claw_light.context import current_snapshot, native_context
 from vibe_claw_light.providers import Result
 from vibe_claw_light.runtime import Bot, RELOAD
@@ -101,6 +101,101 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(snapshots[-1]["offset"], 9)
         self.assertEqual(self.bot.exit_code, RELOAD)
         self.assertTrue(self.bot.done.is_set())
+
+    def test_switch_missing_engine_guides_local_install_without_changing_state(self):
+        self.bot.state["sessions"] = {"codex": "session_codex", "claude": "session_claude"}
+        self.bot.ingest(self.update(1))
+        queue = self.disk()["queue"]
+        with patch("vibe_claw_light.runtime.find_cli", return_value=None), \
+                patch("vibe_claw_light.runtime.auth_status") as auth, \
+                patch("vibe_claw_light.runtime.save_config") as save:
+            self.bot.ingest(self.update(2, "/switch claude"))
+        auth.assert_not_called()
+        save.assert_not_called()
+        self.assertFalse(self.bot.done.is_set())
+        self.assertFalse(self.bot.cancel.is_set())
+        self.assertEqual(self.disk()["queue"], queue)
+        self.assertEqual(self.disk()["sessions"], {"codex": "session_codex", "claude": "session_claude"})
+        message = self.telegram.messages[-1][1]
+        self.assertIn("docs/MOTEURS.md", message)
+        self.assertIn("Ajoute seulement le moteur claude", message)
+        self.assertIn(str(self.root), message)
+        self.assertIn("Le bot reste sur codex", message)
+
+    def test_switch_unconfirmed_login_requires_local_auth_without_restart(self):
+        self.bot.state["sessions"] = {"codex": "session_codex"}
+        with patch("vibe_claw_light.runtime.find_cli", return_value="claude-native"), \
+                patch("vibe_claw_light.runtime.auth_status", return_value=(False, "Connexion non confirmée.")) as auth, \
+                patch("vibe_claw_light.runtime.save_config") as save:
+            self.bot.ingest(self.update(2, "/switch claude"))
+        auth.assert_called_once_with("claude", "claude-native")
+        save.assert_not_called()
+        self.assertFalse(self.bot.done.is_set())
+        self.assertFalse(self.bot.cancel.is_set())
+        self.assertEqual(self.disk()["sessions"], {"codex": "session_codex"})
+        message = self.telegram.messages[-1][1]
+        self.assertIn("claude auth login", message)
+        self.assertIn("/switch claude", message)
+        self.assertIn("terminal interactif", message)
+
+    def test_switch_connected_engine_preserves_both_sessions_memory_and_telegram(self):
+        save_config(self.root, {"PROVIDER": "codex", "TELEGRAM_TOKEN": "fixture-token",
+                                "TELEGRAM_OWNER_ID": "123", "TELEGRAM_CHAT_ID": "123"})
+        before = read_values(self.root)
+        note = "Préfère les documents courts."
+        self.bot.memory.apply_updates({"upsert": [{"key": "preference.style", "kind": "preference",
+                                                   "text": note, "evidence": note}]}, note)
+        memory_before = self.bot.memory.path.read_bytes()
+        sessions = {"codex": "session_codex", "claude": "session_claude"}
+        self.bot.state["sessions"] = dict(sessions)
+        self.bot.state["context_revisions"] = {
+            provider: {"session": session, "revision": "unchanged"}
+            for provider, session in sessions.items()
+        }
+        self.bot.ingest(self.update(1))
+        queue = self.disk()["queue"]
+        with patch("vibe_claw_light.runtime.find_cli", return_value="claude-native"), \
+                patch("vibe_claw_light.runtime.auth_status", return_value=(True, "Connexion enregistrée.")):
+            self.bot.ingest(self.update(2, "/switch claude"))
+        after = read_values(self.root)
+        self.assertEqual(after, {**before, "PROVIDER": "claude"})
+        self.assertEqual(self.bot.memory.path.read_bytes(), memory_before)
+        self.assertEqual(self.disk()["sessions"], sessions)
+        self.assertEqual(self.disk()["queue"], queue)
+        self.assertEqual(self.bot.exit_code, RELOAD)
+        self.assertTrue(self.bot.done.is_set())
+        fresh = Bot(replace(self.config, provider="claude"), FakeTelegram())
+        self.assertEqual(fresh.state["sessions"], sessions)
+        self.assertEqual(fresh.state["context_revisions"], self.disk()["context_revisions"])
+        self.assertIn("Je recharge le bot", self.telegram.messages[-1][1])
+
+    def test_switch_current_engine_does_not_restart_or_reauthenticate(self):
+        with patch("vibe_claw_light.runtime.auth_status") as auth, \
+                patch("vibe_claw_light.runtime.save_config") as save:
+            self.bot.ingest(self.update(text="/switch codex"))
+        auth.assert_not_called()
+        save.assert_not_called()
+        self.assertFalse(self.bot.done.is_set())
+        self.assertIn("déjà le moteur sélectionné", self.telegram.messages[-1][1])
+
+    def test_simple_reply_has_no_automatic_acknowledgment(self):
+        self.bot.ingest(self.update(text="Bonjour"))
+        self.run_once(Result("Bonjour !"))
+        self.assertEqual(self.telegram.messages, [(123, "Bonjour !")])
+
+    def test_worker_readiness_is_written_after_start_and_removed_on_exit(self):
+        path = self.config.data / "worker.ready.json"
+
+        def stop_when_ready(timeout):
+            self.assertEqual(read_json(path), {"pid": 4321, "provider": "codex"})
+            return True
+
+        with patch.object(self.bot, "poll"), patch.object(self.bot, "work"), \
+                patch.object(self.bot, "ticker"), \
+                patch.object(self.bot.done, "wait", side_effect=stop_when_ready), \
+                patch("vibe_claw_light.runtime.os.getpid", return_value=4321):
+            self.assertEqual(self.bot.run(), 0)
+        self.assertFalse(path.exists())
 
     def test_failed_persistence_cannot_advance_offset_or_make_task_runnable(self):
         original = self.disk()

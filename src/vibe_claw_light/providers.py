@@ -244,12 +244,6 @@ class ProviderRunner:
                     item = event.get("item") or {}
                     if item.get("type") == "agent_message" and event_type == "item.completed":
                         final_text = item.get("text", "")
-                    if event_type == "item.started" and on_progress:
-                        names = {"command_execution": "Je travaille dans les fichiers.",
-                                 "file_change": "Je prépare les modifications.",
-                                 "web_search": "Je vérifie les informations."}
-                        if item.get("type") in names:
-                            on_progress(names[item["type"]])
                     if event_type == "turn.failed":
                         error = str(event.get("error", {}).get("message", "Codex a interrompu la tâche."))
                     if event_type == "error":
@@ -262,8 +256,6 @@ class ProviderRunner:
                         for block in event.get("message", {}).get("content", []):
                             if block.get("type") == "text":
                                 parts.append(block.get("text", ""))
-                            elif block.get("type") == "tool_use" and on_progress:
-                                on_progress("Je travaille dans les fichiers.")
                         if parts:
                             final_text = "\n".join(parts)
                     if event_type == "result":

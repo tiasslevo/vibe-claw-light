@@ -12,6 +12,7 @@ import threading
 import time
 import unittest
 from unittest.mock import Mock, patch
+from types import SimpleNamespace
 from urllib.parse import urlencode
 
 from vibe_claw_light.config import load_config, read_values, save_config
@@ -52,7 +53,7 @@ class FakeTelegram:
             raise self.failure
         return {"id": 123456, "is_bot": True, "username": "TestAssistantBot"}
 
-    def request(self, method):
+    def request(self, method, **kwargs):
         self.methods.append(method)
         if method != "getWebhookInfo":
             raise AssertionError("Requête Telegram inattendue")
@@ -87,7 +88,10 @@ class WizardTests(unittest.TestCase):
 
     def wizard(self, provider="codex", authenticated=True):
         wizard = Wizard(self.root, provider, "test-cli", authenticated,
-                        telegram_factory=lambda token: self.fake)
+                        telegram_factory=lambda token: self.fake,
+                        diagnostic_runner=lambda *a, **kw: SimpleNamespace(ok=True, checks=()),
+                        service_start=lambda root, **kw: 0,
+                        service_status=lambda root: {"running": True, "ready": True})
         self.wizards.append(wizard)
         return wizard
 
@@ -406,6 +410,41 @@ class WizardTests(unittest.TestCase):
             self.assertEqual(setup(self.root, "claude"), 1)
         browser.assert_not_called()
 
+    def test_manual_login_is_detected_by_bounded_background_checks(self):
+        wizard = self.wizard(authenticated=False)
+        with patch("vibe_claw_light.onboarding.auth_status", return_value=(False, "pending")) as auth:
+            wizard.refresh_login()
+            auth.assert_not_called()
+            wizard.enable_login_watch()
+            wizard.refresh_login()
+            self.assertTrue(wait_until(lambda: not wizard.checking_login))
+            self.assertEqual(auth.call_count, 1)
+            wizard.refresh_login()
+            self.assertEqual(auth.call_count, 1)
+            self.assertEqual(wizard.phase, "auth")
+            self.assertEqual(wizard.error, "")
+            wizard.auth_watch_deadline = time.monotonic() - 1
+            wizard.auth_next_check = 0
+            wizard.refresh_login()
+            self.assertEqual(auth.call_count, 1)
+            wizard.enable_login_watch()
+            auth.return_value = (True, "connected")
+            wizard.refresh_login()
+            self.assertTrue(wait_until(lambda: wizard.phase == "configure"))
+            wizard.auth_next_check = 0
+            wizard.refresh_login()
+            self.assertEqual(auth.call_count, 2)
+
+    def test_cancelled_login_disables_automatic_detection(self):
+        wizard = self.wizard(authenticated=False)
+        wizard.enable_login_watch()
+        wizard.phase = "authenticating"
+        wizard.cancel_login()
+        with patch("vibe_claw_light.onboarding.auth_status") as auth:
+            wizard.refresh_login()
+        auth.assert_not_called()
+        self.assertEqual(wizard.phase, "auth")
+
 
 class HttpTests(unittest.TestCase):
     def setUp(self):
@@ -457,7 +496,7 @@ class HttpTests(unittest.TestCase):
         self.assertIn('type="password" name="token"', html)
         self.assertNotIn(TOKEN, html)
         self.assertEqual(headers["Cache-Control"], "no-store")
-        self.assertEqual(headers["Referrer-Policy"], "no-referrer")
+        self.assertEqual(headers["Referrer-Policy"], "same-origin")
         self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
 
     def test_form_escapes_untrusted_display_values(self):

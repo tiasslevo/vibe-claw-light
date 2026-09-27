@@ -2,6 +2,8 @@
 set -euo pipefail
 
 # Do not overwrite VIBE_CLAW_ROOT: it may belong to a calling agent instance.
+export PYTHONUTF8=1
+export PYTHONIOENCODING=utf-8
 project_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 provider="${1:-}"
 skip_setup="${2:-}"
@@ -78,8 +80,5 @@ if [[ "$skip_setup" == '--skip-setup' ]]; then
   exit 0
 fi
 "$python_executable" run.py setup --provider "$provider"
-printf 'Verification Telegram et petit appel de test au moteur choisi...\n'
-"$python_executable" run.py doctor --live
-"$python_executable" run.py start
-printf 'Installation terminee. Ecris a ton bot dans Telegram.\n'
+printf 'Assistant pret. Ecris a ton bot dans Telegram.\n'
 printf 'Pour les prochains demarrages : bash start.sh. Pour arreter : bash start.sh stop.\n'
