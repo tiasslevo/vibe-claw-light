@@ -143,20 +143,33 @@ class RealTerminalTests(unittest.TestCase):
         self.control.mkdir()
         self.cli = self.root / "fake-cli"
         self.pid = self.fd = None
+        self.terminal_tail = b""
         self.addCleanup(self.close_terminal)
 
     def close_terminal(self):
-        if self.pid is not None:
-            try:
-                os.killpg(self.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            try:
-                os.waitpid(self.pid, 0)
-            except ChildProcessError:
-                pass
+        # Fermer d'abord le maître vide le terminal et envoie le hangup à son
+        # groupe. Sur BSD, un enfant sorti peut sinon rester en attente de drain.
         if self.fd is not None:
             os.close(self.fd)
+            self.fd = None
+        if self.pid is not None:
+            try:
+                os.kill(self.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                # Un enfant déjà sorti peut être non signalable sur macOS.
+                # Le waitpid borné ci-dessous vérifie tout de même sa fin.
+                pass
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                try:
+                    pid, _ = os.waitpid(self.pid, os.WNOHANG)
+                except ChildProcessError:
+                    pid = self.pid
+                if pid:
+                    self.pid = None
+                    break
+                time.sleep(0.02)
+            self.assertIsNone(self.pid, "Le processus PTY de test n'a pas été nettoyé.")
 
     def start_terminal(self, provider="claude", timeout=10):
         import pty
@@ -167,6 +180,9 @@ class RealTerminalTests(unittest.TestCase):
                      "print('NATIVE_ARGS=' + ' '.join(sys.argv[1:]), flush=True)\n"
                      "print('INSTANCE=' + os.environ.get('VIBE_CLAW_ROOT', ''), flush=True)\n"
                      "code = input('RETURN_CODE: ')\n"
+                     # Une sortie plus grande que le buffer PTY rend le besoin
+                     # de drainage observable aussi sur Linux, pas seulement BSD.
+                     "print('X' * 131072 + '\\nLOGIN_FINISHED', flush=True)\n"
                      "raise SystemExit(0 if code == 'simulated-code' else 3)\n")
         self.cli.chmod(0o700)
         write_json(self.control / "request.json", {
@@ -197,12 +213,21 @@ class RealTerminalTests(unittest.TestCase):
     def wait_result(self):
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
+            # Un terminal réel lit continuellement la sortie. Le test doit
+            # aussi vider l'écho du code et les derniers messages : attendre
+            # seulement waitpid peut bloquer la fermeture du PTY sous macOS.
+            ready, _, _ = select.select([self.fd], [], [], 0.02)
+            if ready:
+                try:
+                    block = os.read(self.fd, 16384)
+                except OSError:
+                    block = b""
+                self.terminal_tail = (self.terminal_tail + block)[-4096:]
             pid, status = os.waitpid(self.pid, os.WNOHANG)
             if pid:
                 self.pid = None
                 return os.waitstatus_to_exitcode(status)
-            time.sleep(0.02)
-        self.fail("Le relais n'a pas quitté son terminal.")
+        self.fail(f"Le relais n'a pas quitté son terminal. Dernière sortie : {self.terminal_tail!r}")
 
     def test_native_cli_receives_a_pasted_code_in_a_real_controlling_terminal(self):
         output = self.start_terminal()
