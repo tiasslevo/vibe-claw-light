@@ -7,6 +7,9 @@ Installer Chromium avec ``python -m playwright install chromium`` dans
 l'environnement de test, ou définir VCL_BROWSER_EXECUTABLE. Sur Windows,
 VCL_BROWSER_CHANNEL=msedge utilise Edge installé sur la machine.
 
+VCL_BROWSER_PROVIDER=claude rejoue les mêmes parcours avec les formulaires
+Claude Code ; la valeur par défaut est codex. Les CLI restent simulés.
+
 Les formulaires sont soumis par de vrais clics. Aucun test n'ajoute ou ne
 remplace un en-tête Origin : c'est précisément le comportement à vérifier.
 """
@@ -159,7 +162,7 @@ class BrowserTests(unittest.TestCase):
     def start_server(self, authenticated=True, *, port=0, **kwargs):
         options = {"diagnostic_runner": self.diagnostics, "service_start": self.service_start,
                    "service_status": self.service_status, **kwargs}
-        wizard = Wizard(self.root, "codex", "test-cli", authenticated,
+        wizard = Wizard(self.root, os.environ.get("VCL_BROWSER_PROVIDER", "codex"), "test-cli", authenticated,
                         telegram_factory=lambda token: self.fake, **options)
         # Le formulaire reste réaliste, avec un chemin publiable dans les
         # captures. Les écritures du test utiliseront ensuite son dossier temp.
