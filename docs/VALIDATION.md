@@ -12,7 +12,7 @@ L'héritage de modules PowerShell 7 incompatibles empêchait Windows PowerShell 
 
 | Vérification | Environnement et résultat |
 | --- | --- |
-| Suite locale | 197 tests découverts sous Linux ; 177 exécutés avec succès, 20 ignorés car réservés à Windows ou aux navigateurs optionnels. |
+| Suite locale | 198 tests découverts sous Linux ; 178 exécutés avec succès, 20 ignorés car réservés à Windows ou aux navigateurs optionnels. |
 | Navigateur Linux | 12 tests réussis dans Chromium 149.0.7827.55 avec Playwright 1.63.0. Vrai serveur HTTP et vrais clics, sans fabriquer l'en-tête Origin. |
 | Navigateur Windows | Les mêmes 12 tests réussis dans Edge 154.0.4258.37 sur Windows natif, depuis une copie temporaire des sources publiques. |
 | Formulaires | Connexion, vérification et détection automatique d'un login manuel, annulation, configuration, association, reprise après erreur, modification des réglages, démarrage et fin. Ancien onglet après redémarrage du serveur, CSRF incorrect et absence de token dans le HTML également vérifiés. |
@@ -20,7 +20,7 @@ L'héritage de modules PowerShell 7 incompatibles empêchait Windows PowerShell 
 | Installateur shell | Test Linux avec dépendances factices : setup porte le diagnostic et le démarrage, sans double appel modèle ; --skip-setup reste disponible. Syntaxe Bash vérifiée. |
 | Diagnostics | 21 tests couvrent les prérequis, les erreurs, la reprise, l'expiration et l'invalidation du cache modèle, les changements de moteur/configuration, l'annulation et le verrou empêchant deux tests simultanés. |
 | Erreurs Telegram | 8 tests couvrent DNS, TLS, délai, réseau, réponses HTTP, limitation, réponses invalides, réessais bornés et expurgation des erreurs. |
-| Service | 14 tests, dont de vrais processus temporaires : démarrage confirmé par le worker, rechargement, arrêt, annulation et concurrence. Une tentative annulée ferme ses propres processus. |
+| Service | 15 tests, dont de vrais processus temporaires : démarrage confirmé par le worker, rechargement, arrêt, annulation et concurrence. Une tentative annulée ferme ses propres processus. Un refus de lecture temporaire du statut Windows ne fait pas échouer la surveillance. |
 | Réponse et moteurs | Acquittements préfabriqués retirés ; changement de moteur vérifié sans perdre la mémoire, l'association ni les sessions ordinaires. Un moteur absent ou déconnecté laisse la configuration précédente intacte. |
 | Interface | Captures inspectées sur ordinateur et petit écran. Ressources locales uniquement, sans police ni script externe. |
 

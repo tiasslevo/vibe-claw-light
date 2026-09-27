@@ -264,6 +264,25 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(service.stop(root), 0)
         self.assertFalse((root / "data" / "stop.request").exists())
 
+    def test_status_can_retry_a_read_denied_during_worker_reload(self):
+        root = self.root_folder()
+        write_json(root / "data" / "service.json", {"pid": 12345})
+        write_json(root / "data" / "worker.ready.json", {"pid": 12346})
+
+        def temporary_denial(path, default=None):
+            if path.name == "worker.ready.json":
+                raise PermissionError("Windows file is being replaced")
+            return read_json(path, default)
+
+        with FileLock(root / "data" / "service.lock"), FileLock(root / "data" / "worker.lock"):
+            with patch.object(service, "read_json", side_effect=temporary_denial):
+                state = service.status(root)
+                self.assertTrue(state["running"])
+                self.assertFalse(state["ready"])
+                self.assertEqual(state["pid"], 12345)
+            self.assertTrue(service.status(root)["ready"])
+        self.assertEqual(read_json(root / "data" / "worker.ready.json"), {"pid": 12346})
+
     def test_supervise_refuses_a_second_owner_without_spawning_or_erasing_state(self):
         root = self.root_folder()
         write_json(root / "data" / "service.json", {"pid": 12345})

@@ -25,11 +25,21 @@ def command(root: Path, action: str) -> list[str]:
     return [sys.executable, "-m", "vibe_claw_light", "--root", str(root), action]
 
 
+def _status_record(path: Path) -> dict:
+    # Métadonnées éphémères uniquement. Sous Windows, un fichier en cours de
+    # suppression/remplacement peut être brièvement interdit à la lecture.
+    try:
+        value = read_json(path, {})
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
 def status(root: Path) -> dict:
     active = is_locked(root / "data" / "service.lock")
-    record = read_json(root / "data" / "service.json", {}) if active else {}
+    record = _status_record(root / "data" / "service.json") if active else {}
     ready = (active and is_locked(root / "data" / "worker.lock")
-             and bool(read_json(root / "data" / "worker.ready.json", {})))
+             and bool(_status_record(root / "data" / "worker.ready.json")))
     return {**(record or {}), "running": active, "ready": ready}
 
 
