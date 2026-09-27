@@ -10,7 +10,7 @@ from vibe_claw_light.memory import MAX_CONTEXT_CHARS, MemoryStore, extract_memor
 class MemoryTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.store = MemoryStore(self.root)
 
     def tearDown(self):

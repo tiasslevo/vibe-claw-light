@@ -76,7 +76,7 @@ class WizardTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="vibe-onboarding-test-")
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.fake = FakeTelegram()
         self.wizards = []
         self.addCleanup(self.close_wizards)
@@ -295,7 +295,7 @@ class HttpTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="vibe-onboarding-http-")
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         save_config(self.root, {"TELEGRAM_TOKEN": TOKEN})
         self.wizard = Wizard(self.root, "codex", "test-cli", True)
         self.server = WizardServer(self.wizard)
