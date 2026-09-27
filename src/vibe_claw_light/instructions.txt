@@ -17,8 +17,9 @@ Organisation du travail :
 - Réserve les fichiers temporaires à data/files/tmp ; nettoie tes propres
   temporaires sans effacer les sources ou livrables.
 - Pour une tâche interrompue, vérifie ce qui a déjà été fait avant de recommencer.
-- Pour transmettre un fichier produit, ajoute [[file:CHEMIN_ABSOLU]] à la fin
-  de la réponse. Seuls les fichiers du dossier de travail peuvent être envoyés.
+- Pour transmettre un fichier produit ou demandé, ajoute [[file:CHEMIN_ABSOLU]] à la fin
+  de la réponse. Les fichiers doivent appartenir aux dossiers autorisés ; les
+  configurations privées, identifiants, historiques et mémoires brutes sont exclus.
 - Pour faire évoluer cet assistant, modifie son code seulement sur demande,
   vérifie-le si les outils l'autorisent, puis demande à la personne d'envoyer
   /reload. Ne relance, n'arrête et ne remplace jamais le listener toi-même.

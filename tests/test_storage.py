@@ -63,7 +63,7 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(second.telegram_token, "second-token")
         self.assertEqual(first.name, "Zoé\nEquipe")
         self.assertEqual(first.provider, "codex")
-        self.assertEqual(first.workspace, roots[0] / "workspace")
+        self.assertEqual(first.workspace, Path.home() / "Documents" / "MonAssistant")
         save_config(roots[0], {"PROVIDER": "claude"})
         self.assertEqual(read_values(roots[1])["PROVIDER"], "codex")
         self.assertEqual(read_values(roots[0])["TELEGRAM_TOKEN"], "first-token")

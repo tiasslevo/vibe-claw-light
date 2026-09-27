@@ -1,12 +1,12 @@
 # Démo finale : un assistant qui retrouve son travail
 
-Prévoir 10 à 15 minutes de démonstration après l'installation. Les participants choisissent leur moteur ; un compte Codex ou Claude Code compatible suffit.
+Prévoir 10 à 15 minutes de démonstration après l'installation de la v0.2.0. Les participants choisissent leur moteur ; un compte Codex ou Claude Code compatible suffit.
 
 ## Préparer avant la séance
 
 - Tester la release sur la machine de présentation avec le moteur choisi et `doctor --live`.
 - Vérifier l'échange Telegram réel, `/stop`, `/clear` et `/reload` avant de présenter ces commandes.
-- Copier `examples/Atelier` dans le dossier de travail autorisé, puis créer `Atelier/livrables`. Les trois fichiers fournis dans `sources` sont fictifs et peuvent être montrés en public.
+- Copier `examples/Atelier` dans le dossier de rangement proposé, `Documents/MonAssistant` par défaut, puis créer `Atelier/livrables`. Les trois fichiers fournis dans `sources` sont fictifs et peuvent être montrés en public.
 - Garder l'ordinateur sur secteur, connecté et hors veille. Vérifier le quota du compte.
 - Préparer une seconde copie du code fonctionnel, sans la faire tourner avec le même bot. Garder les documents exemples et un compte rendu déjà généré comme secours.
 - Ouvrir l'explorateur de fichiers et Telegram côte à côte. Masquer toute fenêtre contenant un token ou un lien d'association encore actif.
@@ -28,7 +28,7 @@ Dans Telegram :
 
 > Lis les trois notes du projet Atelier dans sources. Prépare un compte rendu dans Atelier/livrables/compte-rendu.md. Rassemble les décisions et les actions à suivre. Quand une information manque, signale-le.
 
-Montrer le fichier qui apparaît dans l'explorateur, puis l'ouvrir. Relever une information effectivement présente dans les notes et une incertitude conservée. Expliquer que le téléphone a donné la consigne et que le programme sur le PC a utilisé les fichiers.
+Montrer le fichier qui apparaît dans l'explorateur, puis l'ouvrir. Demander ensuite au bot de l'envoyer dans Telegram pour montrer le retour du livrable. Relever une information effectivement présente dans les notes et une incertitude conservée. Expliquer que le téléphone a donné la consigne et que le programme sur le PC a utilisé les fichiers.
 
 ## 2. Lui apprendre une préférence et un repère de projet
 
@@ -38,7 +38,7 @@ Dans Telegram :
 
 Afficher `/memory`. Vérifier qu'il a retenu quelques repères utiles avec leurs clés. Si le contenu n'est pas encore enregistré, demander une confirmation explicite avant de poursuivre la démo.
 
-La mémoire doit retenir le projet, son point d'entrée et la préférence de rédaction. Elle n'a pas besoin de recopier les trois notes ni de lister chaque fichier.
+La mémoire doit retenir le projet, son point d'entrée et la préférence de rédaction. Elle n'a pas besoin de recopier les trois notes ni de lister chaque fichier. Préciser que les deux moteurs utilisent les mêmes souvenirs, tandis que chacun conserve sa propre conversation.
 
 ## 3. Repartir d'une conversation neuve
 
@@ -56,7 +56,7 @@ L'oubli supprime le souvenir local concerné et les références aux sessions de
 
 ## 5. Faire évoluer l'agent et recharger
 
-Utiliser une copie de démonstration du projet. Le code à modifier doit faire partie des dossiers accessibles au moteur ; vérifier ce point avant la séance. Une autorisation de commandes système n'est pas nécessaire pour modifier un petit fichier Python avec les outils de fichiers, mais elle peut l'être pour lancer sa vérification.
+Utiliser une copie de démonstration du projet. Son code fait partie des dossiers de cette installation. Le mode personnel active les commandes nécessaires à la vérification ; en mode limité avec Claude, vérifier l'option de commandes avant la séance.
 
 > Ajoute une commande Telegram /bonjour qui répond avec mon nom d'agent et le chemin de mon dossier de travail. Modifie uniquement le gestionnaire des commandes et son aide. Vérifie que le code reste valide. Ne redémarre pas le service toi-même ; dis-moi quand je peux envoyer /reload.
 
@@ -66,6 +66,8 @@ Relire le petit changement. Envoyer `/reload`, attendre la confirmation de retou
 
 ## Si l'installation d'un participant bloque
 
+Si le fournisseur demande de recopier un code de connexion, utiliser le terminal interactif ouvert par le setup. Si aucune fenêtre ne s'ouvre, lancer la commande affichée dans un terminal du PC, puis revérifier depuis la page. Ne jamais faire dicter ou publier un code de connexion, un token ou un lien d'association pendant la séance.
+
 Poursuivre la démo sur l'installation déjà prête. Le participant conserve le prompt et la documentation de diagnostic pour terminer ensuite. Ne lui faire créer aucun compte payant dans l'urgence.
 
 Si la connexion du moteur de présentation tombe, montrer le compte rendu déjà généré en disant qu'il a été préparé auparavant. Montrer les fichiers mémoire locaux permet encore d'expliquer comment l'agent retrouve un projet. Ne pas présenter le secours comme une exécution en direct.
@@ -73,7 +75,7 @@ Si la connexion du moteur de présentation tombe, montrer le compte rendu déjà
 ## Ce que les participants emportent
 
 - La release précise du projet et son prompt d'installation.
-- Un bot personnel relié à leur propre moteur et à leur propre dossier, pour ceux dont le setup est terminé.
+- Un bot personnel relié à leur moteur et aux dossiers autorisés, pour ceux dont le setup est terminé.
 - Un exemple de projet rangé avec ses sources et ses livrables.
 - Les commandes pour inspecter et corriger la mémoire, redémarrer et arrêter le service.
 

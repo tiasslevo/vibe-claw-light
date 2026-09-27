@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 
 from vibe_claw_light.config import Config
+from vibe_claw_light.context import current_snapshot, native_context
 from vibe_claw_light.providers import Result
 from vibe_claw_light.runtime import Bot, RELOAD
 from vibe_claw_light.storage import FileLock, read_json, write_json
@@ -184,14 +185,35 @@ class RuntimeTests(unittest.TestCase):
                     bot.wake.set()
                     worker.join(2)
 
-    def test_every_prompt_reads_current_memory_and_clear_keeps_it(self):
+    def test_memory_is_refreshed_in_native_context_not_repeated_in_user_messages(self):
         task = {"text": "Où commencer ?"}
         unique = "Travaille le mardi à 06h15."
-        self.assertNotIn(unique, self.bot.prompt(task))
+        self.assertNotIn(unique, current_snapshot(self.config)[0])
         self.bot.memory.apply_updates({"upsert": [{"key": "habit.hours", "kind": "habit", "text": unique, "evidence": unique}]}, unique)
-        self.assertIn(unique, self.bot.prompt(task))
+        self.assertIn(unique, current_snapshot(self.config)[0])
+        first = self.bot.prompt(task)
+        self.assertIn(unique, first)
+        self.bot.state["context_revisions"]["codex"] = {"session": "session_test", "revision": task["context_revision"]}
+        next_message = self.bot.prompt(task, "session_test")
+        self.assertNotIn(unique, next_message)
+        self.assertNotIn("VIBE_MEMORY", next_message)
+        self.assertLess(len(next_message), 450)
+        self.assertIn("current.md", next_message)
+        self.assertIn(unique, self.bot.prompt(task, "different_session"))
         self.bot.ingest(self.update(2, "/clear"))
         self.assertIn(unique, self.bot.prompt(task))
+
+    def test_native_context_reload_picks_up_rules_soul_and_updated_memory(self):
+        soul = self.root / "identity" / "SOUL.md"
+        soul.parent.mkdir()
+        soul.write_text("Rôle fictif : documentaliste.", encoding="utf-8")
+        first = current_snapshot(self.config)[0]
+        self.assertIn("documentaliste", first)
+        soul.write_text("Rôle fictif : rédacteur.", encoding="utf-8")
+        second = current_snapshot(self.config)[0]
+        self.assertIn("rédacteur", second)
+        self.assertNotIn("documentaliste", second)
+        self.assertIn("Ne relance", native_context(self.config))
 
     def test_memory_protocol_never_reaches_telegram_even_when_malformed(self):
         self.bot.ingest(self.update())
@@ -224,6 +246,22 @@ class RuntimeTests(unittest.TestCase):
         self.bot.deliver(f"[[file:{outside}]]\n[[file:{inside}]]")
         self.assertEqual(self.telegram.documents, [(123, inside)])
 
+    def test_delivery_accepts_an_authorized_project_and_denies_private_data(self):
+        extra = self.root / "another-project"
+        extra.mkdir()
+        output = extra / "document.txt"
+        output.write_text("Livrable", encoding="utf-8")
+        bot = Bot(replace(self.config, extra_dirs=(extra,)), self.telegram)
+        for name in ("data/context/codex.md", "data/state.json", "memory/INDEX.md", ".claude/secret.txt",
+                     ".claude.json", ".git-credentials", ".netrc", ".npmrc"):
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("private fixture", encoding="utf-8")
+            self.assertFalse(bot.can_deliver(path))
+        self.assertTrue(bot.can_deliver(output))
+        bot.deliver(f"[[file:{output}]]")
+        self.assertEqual(self.telegram.documents[-1], (123, output))
+
     def test_attachment_filename_cannot_escape_private_download_directory(self):
         task = {"id": 1, "document": {"file_id": "fake", "file_name": "../../outside.txt", "file_size": 4}}
         self.bot.attachments(task)
@@ -239,6 +277,79 @@ class RuntimeTests(unittest.TestCase):
         fresh.persist()
         fresh = Bot(replace(fresh.config, allow_shell=True), FakeTelegram())
         self.assertEqual(fresh.state["sessions"], {})
+
+    def run_memory_overflow(self, replies, interrupt=None):
+        from vibe_claw_light import memory as memory_module
+        original = "Préférence A : " + "documents sobres et courts, " * 10
+        new = "Préférence B : " + "présentations lisibles et utiles, " * 9
+        self.bot.memory.apply_updates({"upsert": [{"key": "preference.base", "kind": "preference", "text": original, "evidence": original}]}, original)
+        before = self.bot.memory.path.read_bytes()
+        budget = len(self.bot.memory.context()) + 20
+        self.bot.ingest(self.update(text=new))
+        proposal = {"upsert": [{"key": "preference.new", "kind": "preference", "text": new, "evidence": new}]}
+        initial = "Travail terminé.\n<!--VIBE_MEMORY\n" + json.dumps(proposal) + "\nVIBE_MEMORY-->"
+        calls = []
+        bot = self.bot
+
+        class Runner:
+            def run(self, prompt, session_id, cancel, on_session, on_progress, *, maintenance=False):
+                calls.append((prompt, session_id, maintenance))
+                if not maintenance:
+                    on_session("session_conversation")
+                    bot.done.set()  # Un seul message de travail dans ce test.
+                    return Result(initial, "session_conversation")
+                if interrupt:
+                    bot.ingest(self_outer.update(2, interrupt))
+                return Result(replies[min(len(calls) - 2, len(replies) - 1)], "session_maintenance")
+
+        self_outer = self
+        bot.runner_factory = lambda config: Runner()
+        with patch.object(memory_module, "MAX_CONTEXT_CHARS", budget):
+            bot.work()
+        return calls, before
+
+    def test_rules_change_resets_session_but_profile_changes_do_not(self):
+        self.bot.state["sessions"] = {"codex": "session_existing"}
+        self.bot.persist()
+        soul = self.root / "identity" / "SOUL.md"
+        soul.parent.mkdir()
+        soul.write_text("Ton bref.", encoding="utf-8")
+        unchanged = Bot(self.config, FakeTelegram())
+        self.assertEqual(unchanged.state["sessions"], {"codex": "session_existing"})
+        with patch("vibe_claw_light.runtime.native_context", return_value="Consignes nouvelles"):
+            changed = Bot(self.config, FakeTelegram())
+        self.assertEqual(changed.state["sessions"], {})
+
+    def test_overflow_retries_once_and_preserves_the_chat_session(self):
+        compact = {"compact": [{"key": "preference.base", "text": "Documents sobres et courts."},
+                               {"key": "preference.new", "text": "Présentations lisibles et utiles."}]}
+        valid = "<!--VIBE_MEMORY\n" + json.dumps(compact) + "\nVIBE_MEMORY-->"
+        calls, _ = self.run_memory_overflow(["invalid", valid])
+        self.assertEqual(len(calls), 3)
+        self.assertTrue(all(sid is None and maintenance for _, sid, maintenance in calls[1:]))
+        self.assertIn("refusée", calls[-1][0])
+        self.assertEqual(self.disk()["sessions"], {"codex": "session_conversation"})
+        self.assertIn("preference.new", self.bot.memory.context())
+        messages = "\n".join(text for _, text in self.telegram.messages)
+        self.assertIn("consolidée", messages)
+        self.assertNotIn("VIBE_MEMORY", messages)
+
+    def test_failed_maintenance_is_bounded_and_preserves_the_existing_memory(self):
+        calls, before = self.run_memory_overflow(["invalid"])
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(self.bot.memory.path.read_bytes(), before)
+        self.assertIn("nouvel ajout non retenu", "\n".join(text for _, text in self.telegram.messages))
+
+    def test_forget_during_maintenance_cannot_restore_old_memories(self):
+        compact = {"compact": [{"key": "preference.base", "text": "Documents sobres."},
+                               {"key": "preference.new", "text": "Présentations lisibles."}]}
+        valid = "<!--VIBE_MEMORY\n" + json.dumps(compact) + "\nVIBE_MEMORY-->"
+        calls, _ = self.run_memory_overflow([valid], interrupt="/forget preference.base")
+        self.assertEqual(len(calls), 2)
+        state = json.loads(self.bot.memory.path.read_text(encoding="utf-8"))
+        self.assertEqual(state["entries"], {})
+        self.assertIn("preference.base", state["forgotten"])
+        self.assertEqual(self.disk()["sessions"], {})
 
 
 if __name__ == "__main__":

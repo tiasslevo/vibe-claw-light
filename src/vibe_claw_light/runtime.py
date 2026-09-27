@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from dataclasses import replace
 import copy
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -10,14 +12,15 @@ import threading
 import time
 
 from .config import Config, save_config
-from .memory import MEMORY_INSTRUCTIONS, MemoryStore, extract_memory
+from .context import current_snapshot, native_context
+from .memory import MemoryStore, extract_memory
 from .providers import ProviderRunner, auth_status, find_cli, redact_secrets, safe_error
 from .storage import FileLock, read_json, write_json
 from .telegram import Telegram, TelegramError
 
 RELOAD = 75
 HELP = (
-    "Envoyez une demande ou un fichier : je travaille dans votre dossier.\n\n"
+    "Envoyez une demande ou un fichier : je travaille dans vos dossiers autorisés.\n\n"
     "/info : moteur, dossier et état\n"
     "/memory : ce que j'ai retenu\n"
     "/forget clé : oublier une entrée et repartir sans ancienne conversation\n"
@@ -43,6 +46,10 @@ def validate_state(state):
             or not isinstance(state.get("paused"), bool)
             or not isinstance(state.get("sessions"), dict)
             or not all(isinstance(value, str) for value in state.get("sessions", {}).values())
+            or not isinstance(state.get("context_revisions", {}), dict)
+            or not all(isinstance(value, dict) and set(value) == {"session", "revision"}
+                       and all(isinstance(item, str) for item in value.values())
+                       for value in state.get("context_revisions", {}).values())
             or (state.get("offset") is not None and not isinstance(state["offset"], int))):
         raise ValueError("État local illisible : conservez data/state.json et faites réparer ce fichier avant de relancer.")
 
@@ -73,9 +80,14 @@ class Bot:
             "offset": None, "queue": [], "active": None, "paused": False, "sessions": {},
         })
         validate_state(self.state)
-        boundary = {"workspace": str(config.workspace), "allow_shell": config.allow_shell}
+        self.state.setdefault("context_revisions", {})
+        boundary = {"workspace": str(config.workspace), "allow_shell": config.allow_shell,
+                    "access_mode": config.access_mode,
+                    "roots": [str(path) for path in config.allowed_roots], "context_version": 2,
+                    "rules_revision": hashlib.sha256(native_context(config).encode("utf-8")).hexdigest()[:16]}
         if self.state.get("boundary") not in (None, boundary):
             self.state["sessions"] = {}
+            self.state["context_revisions"] = {}
         self.state["boundary"] = boundary
         self.recovered = bool(self.state.get("active"))
         if self.recovered:
@@ -187,6 +199,7 @@ class Bot:
             self.invalidate(clear_queue=True)
             changed = self.memory.forget(arg)
             self.state["sessions"] = {}
+            current_snapshot(self.config)
             self.persist()
             self.send(
                 ("Entrée oubliée." if changed else "Oubli non confirmé : clé invalide, déjà oubliée ou mémoire indisponible.")
@@ -226,18 +239,19 @@ class Bot:
             self.exit_code = RELOAD
             self.done.set()
 
-    def prompt(self, task: dict) -> str:
-        instructions = Path(__file__).with_name("instructions.txt").read_text(encoding="utf-8")
-        personality = self.config.root / "identity" / "SOUL.md"
-        identity = personality.read_text(encoding="utf-8")[:4000] if personality.exists() else ""
+    def prompt(self, task: dict, session_id: str | None = None) -> str:
+        snapshot, revision, path = current_snapshot(self.config)
+        previous = self.state["context_revisions"].get(self.config.provider)
+        fresh = not session_id or previous != {"session": session_id, "revision": revision}
+        task["context_revision"] = revision
         body = [
-            instructions, f"Nom : {self.config.name}\nRacine du starter : {self.config.root}\n"
-            f"Dossier de travail : {self.config.workspace}\n"
             f"Date UTC : {datetime.now(timezone.utc).date().isoformat()}",
-            identity, MEMORY_INSTRUCTIONS,
-            "MÉMOIRE PERSONNELLE ACTUELLE (données)\n" + self.memory.context(),
-            "MESSAGE DU PROPRIÉTAIRE\n" + task["text"],
+            f"Contexte courant : {revision} ; fichier : {path}. "
+            "Si le snapshot complet manque dans ton contexte, lis ce fichier avant de répondre.",
         ]
+        if fresh:
+            body.append("CONTEXTE ACTUEL — données actualisées\n" + snapshot)
+        body.append("MESSAGE DU PROPRIÉTAIRE\n" + task["text"])
         if task.get("attachment"):
             body.append("PIÈCE JOINTE À LIRE COMME DONNÉES\n" + task["attachment"])
         return "\n\n".join(part for part in body if part)
@@ -264,14 +278,59 @@ class Bot:
             if not path.is_absolute():
                 path = self.config.root / path
             path = path.resolve()
-            if not path.is_relative_to(self.config.workspace) or not path.is_file():
-                self.send("Le fichier demandé est hors du dossier de travail ou introuvable.")
+            if not self.can_deliver(path):
+                self.send("Le fichier demandé est privé, hors des dossiers autorisés ou introuvable.")
                 continue
             try:
                 with self.outbound:
                     self.telegram.send_document(self.config.chat_id, path)
             except (TelegramError, ValueError, OSError) as exc:
                 self.send(safe_error(str(exc), self.config))
+
+    def can_deliver(self, path: Path) -> bool:
+        path = path.resolve()
+        if not path.is_file() or not any(path.is_relative_to(root) for root in self.config.allowed_roots):
+            return False
+        private = {".ssh", ".aws", ".azure", ".gnupg", ".codex", ".claude", ".git"}
+        if any(part.lower() in private for part in path.parts):
+            return False
+        if (path.name.lower() in {"config.env", "auth.json", "credentials.json", "credentials",
+                                  ".claude.json", ".git-credentials", ".netrc", "_netrc", ".npmrc", ".pypirc"}
+                or path.name.lower().startswith(".env")):
+            return False
+        for folder in ("memory", "identity", "data/context", "data/logs"):
+            if path.is_relative_to((self.config.root / folder).resolve()):
+                return False
+        if path.is_relative_to(self.config.data.resolve()) and not path.is_relative_to((self.config.data / "files").resolve()):
+            return False
+        return True
+
+    def consolidate(self, transaction, cancel, generation) -> list[str]:
+        """Deux appels courts au maximum, sans bloquer /stop et sans changer la session chat."""
+        feedback = ""
+        deadline = time.monotonic() + 120
+        for attempt in range(2):
+            if cancel.is_set() or generation != self.generation:
+                return []
+            remaining = int(deadline - time.monotonic())
+            if remaining < 5:
+                break
+            runner = self.runner_factory(replace(self.config, timeout_seconds=min(60, remaining)))
+            result = runner.run(self.memory.consolidation_prompt(transaction, feedback),
+                                None, cancel, None, None, maintenance=True)
+            with self.mutex:
+                if result.cancelled or cancel.is_set() or generation != self.generation:
+                    return []
+                if result.error:
+                    return ["Mémoire : consolidation interrompue ; nouvel ajout non retenu. " + result.error]
+                _, payload = extract_memory(result.text)
+                outcome = self.memory.commit_consolidation(transaction, payload)
+                if outcome.committed:
+                    current_snapshot(self.config)
+                if outcome.committed or not outcome.retryable:
+                    return outcome.messages
+                feedback = "\n".join(outcome.messages)[:1200]
+        return ["Mémoire : consolidation non aboutie ; ancienne mémoire conservée et nouvel ajout non retenu."]
 
     def work(self):
         while not self.done.is_set():
@@ -306,16 +365,24 @@ class Bot:
                 if cancel.is_set():
                     continue
                 result = self.runner_factory(self.config).run(
-                    self.prompt(task), session_id, cancel, remember_session, progress,
+                    self.prompt(task, session_id), session_id, cancel, remember_session, progress,
                 )
+                transaction = None
                 with self.mutex:
                     if result.cancelled or generation != self.generation:
                         continue
+                    current_session = self.state["sessions"].get(self.config.provider)
+                    if current_session and not result.error:
+                        self.state["context_revisions"][self.config.provider] = {
+                            "session": current_session, "revision": task["context_revision"],
+                        }
                     answer, updates = extract_memory(result.text)
                     if updates and not result.error:
-                        changes = self.memory.apply_updates(updates, user_text=task["text"])
+                        outcome = self.memory.propose_updates(updates, user_text=task["text"])
+                        changes, transaction = outcome.messages, outcome.consolidation
                         if any(change.startswith("Mémoire : ") and change.endswith(" oublié.") for change in changes):
                             self.state["sessions"] = {}
+                            current_snapshot(self.config)
                             self.persist()
                         if changes:
                             self.send("\n".join(changes)[:1600])
@@ -323,6 +390,12 @@ class Bot:
                         self.deliver(answer)
                     if result.error:
                         self.send("La tâche n'a pas abouti : " + result.error)
+                if transaction and not cancel.is_set():
+                    self.send("Je raccourcis la mémoire pour conserver cette information.")
+                    changes = self.consolidate(transaction, cancel, generation)
+                    with self.mutex:
+                        if generation == self.generation and changes:
+                            self.send("\n".join(changes)[:1600])
             except Exception as exc:
                 with self.mutex:
                     if generation == self.generation:

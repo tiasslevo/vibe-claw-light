@@ -3,6 +3,7 @@ from dataclasses import replace
 import io
 import json
 import os
+import subprocess
 from pathlib import Path
 import tempfile
 import threading
@@ -10,6 +11,8 @@ import unittest
 from unittest.mock import patch
 
 from vibe_claw_light.config import Config
+from vibe_claw_light.context import current_snapshot
+from vibe_claw_light.memory import MemoryStore
 from vibe_claw_light.providers import ProviderRunner, auth_status, build_command, find_cli, safe_error
 
 
@@ -108,6 +111,65 @@ class ProviderTests(unittest.TestCase):
         self.assertNotIn("Bash", command[command.index("--allowedTools") + 1])
         allowed = build_command(replace(config, allow_shell=True), executable="claude-native")
         self.assertIn("Bash", allowed[allowed.index("--allowedTools") + 1])
+
+    def test_personal_mode_expands_roots_and_network_without_disabling_sandbox(self):
+        extra = self.root / "second-project"
+        config = replace(self.config, access_mode="personal", extra_dirs=(extra,))
+        for sid in (None, "session_123456"):
+            command = build_command(config, sid, "codex-native")
+            self.assertIn("sandbox_workspace_write.network_access=true", command)
+            self.assertIn('sandbox_mode="workspace-write"', command)
+            roots = next(value.split("=", 1)[1] for value in command if value.startswith("sandbox_workspace_write.writable_roots="))
+            self.assertIn(str(Path.home().resolve()), json.loads(roots))
+            self.assertIn(str(extra), json.loads(roots))
+            self.assertFalse(any("bypass" in value for value in command))
+        claude = build_command(replace(config, provider="claude"), executable="claude-native")
+        self.assertIn("Bash", claude[claude.index("--tools") + 1])
+        self.assertIn("WebFetch", claude[claude.index("--tools") + 1])
+
+    def test_native_instructions_are_present_for_both_engines_even_on_resume(self):
+        for provider in ("codex", "claude"):
+            command = build_command(replace(self.config, provider=provider), "session_123456", "native-cli")
+            if provider == "codex":
+                self.assertTrue(any(value.startswith("developer_instructions=") for value in command))
+                self.assertIn("memories.use_memories=false", command)
+            else:
+                path = Path(command[command.index("--append-system-prompt-file") + 1])
+                self.assertIn("CONTEXTE PERSISTANT", path.read_text(encoding="utf-8"))
+                self.assertEqual(command[command.index("--system-prompt-snapshot") + 1], "off")
+                self.assertIn('{"autoMemoryEnabled":false}', command)
+
+    def test_quoted_memory_and_soul_never_expand_the_windows_command_line(self):
+        store = MemoryStore(self.root)
+        note = 'Valeur fictive : ' + '"\\' * 140
+        for index in range(8):
+            messages = store.apply_updates({"upsert": [{"key": f"person.fixture_{index}", "kind": "person",
+                "text": note, "source": "user", "evidence": note}]}, note)
+            self.assertTrue(any("enregistré" in text for text in messages))
+        soul = self.root / "identity" / "SOUL.md"
+        soul.parent.mkdir()
+        soul.write_text('"' * 2000, encoding="utf-8")
+        snapshot, _, _ = current_snapshot(self.config)
+        self.assertIn("person.fixture_0", snapshot)
+        command = build_command(self.config, "session_123456", "codex-native")
+        windows_units = len(subprocess.list2cmdline(command).encode("utf-16-le")) // 2
+        self.assertLess(windows_units, 32767)
+        self.assertNotIn("person.fixture_0", " ".join(command))
+
+    def test_maintenance_has_no_chat_session_and_reduced_capabilities(self):
+        for provider in ("codex", "claude"):
+            command = build_command(replace(self.config, provider=provider, access_mode="personal"), executable="native-cli", maintenance=True)
+            self.assertNotIn("resume", command)
+            self.assertNotIn("--resume", command)
+            if provider == "codex":
+                self.assertIn('--ephemeral', command)
+                self.assertIn('sandbox_mode="read-only"', command)
+                self.assertIn('sandbox_workspace_write.network_access=false', command)
+                self.assertIn('shell_tool', command)
+            else:
+                self.assertEqual(command[command.index("--tools") + 1], "")
+                self.assertIn("--no-session-persistence", command)
+                self.assertIn("--safe-mode", command)
 
     def test_codex_json_stream_ignores_tool_output_and_saves_session_early(self):
         events = [

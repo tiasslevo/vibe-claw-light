@@ -8,16 +8,19 @@ from .storage import atomic_write
 
 DEFAULTS = {
     "PROVIDER": "codex", "AGENT_NAME": "Mon assistant", "TELEGRAM_TOKEN": "",
-    "TELEGRAM_OWNER_ID": "", "TELEGRAM_CHAT_ID": "", "WORKSPACE": "workspace",
+    "TELEGRAM_OWNER_ID": "", "TELEGRAM_CHAT_ID": "", "WORKSPACE": "",
     "CODEX_BIN": "", "CLAUDE_BIN": "", "CODEX_MODEL": "", "CLAUDE_MODEL": "",
-    "ALLOW_SHELL": "0", "TURN_TIMEOUT": "900",
+    "ALLOW_SHELL": "1", "ACCESS_MODE": "personal", "EXTRA_DIRS": "[]", "TURN_TIMEOUT": "900",
 }
 
 
 def read_values(root: Path) -> dict[str, str]:
     values = dict(DEFAULTS)
+    values["WORKSPACE"] = str(Path.home() / "Documents" / "MonAssistant")
     path = root / "config.env"
     if path.exists():
+        # Une mise à jour ne doit pas élargir les anciennes permissions.
+        values.update(WORKSPACE="workspace", ACCESS_MODE="workspace", ALLOW_SHELL="0")
         for line in path.read_text(encoding="utf-8-sig").splitlines():
             if not line.strip() or line.lstrip().startswith("#") or "=" not in line:
                 continue
@@ -61,6 +64,24 @@ class Config:
     claude_model: str = ""
     allow_shell: bool = False
     timeout_seconds: int = 900
+    access_mode: str = "workspace"
+    extra_dirs: tuple[Path, ...] = ()
+
+    @property
+    def shell_enabled(self) -> bool:
+        return self.access_mode == "personal" or self.allow_shell
+
+    @property
+    def network_enabled(self) -> bool:
+        return self.access_mode == "personal"
+
+    @property
+    def allowed_roots(self) -> tuple[Path, ...]:
+        roots = [self.root, self.workspace]
+        if self.access_mode == "personal":
+            roots.append(Path.home())
+        roots.extend(self.extra_dirs)
+        return tuple(dict.fromkeys(path.resolve() for path in roots))
 
     @property
     def data(self) -> Path:
@@ -98,6 +119,19 @@ def load_config(root: Path, require_token: bool = True) -> Config:
     timeout = int(values["TURN_TIMEOUT"])
     if not 30 <= timeout <= 7200:
         raise ValueError("TURN_TIMEOUT doit être compris entre 30 et 7200 secondes.")
+    access_mode = values["ACCESS_MODE"].strip().lower()
+    if access_mode not in {"personal", "workspace"}:
+        raise ValueError("ACCESS_MODE doit être personal ou workspace.")
+    try:
+        extra = json.loads(values["EXTRA_DIRS"])
+        if (not isinstance(extra, list) or len(extra) > 12
+                or not all(isinstance(path, str) and path.strip() for path in extra)):
+            raise ValueError
+        extra_dirs = tuple(Path(path).expanduser() for path in extra)
+        if any(not path.is_absolute() for path in extra_dirs):
+            raise ValueError
+    except (ValueError, TypeError):
+        raise ValueError("EXTRA_DIRS doit être une liste JSON de chemins absolus (12 maximum).") from None
     return Config(
         root=root, provider=provider, name=values["AGENT_NAME"][:80] or "Mon assistant",
         telegram_token=token, owner_id=identifier("TELEGRAM_OWNER_ID"),
@@ -106,4 +140,5 @@ def load_config(root: Path, require_token: bool = True) -> Config:
         codex_model=values["CODEX_MODEL"], claude_model=values["CLAUDE_MODEL"],
         allow_shell=values["ALLOW_SHELL"].lower() in {"1", "true", "yes", "oui"},
         timeout_seconds=timeout,
+        access_mode=access_mode, extra_dirs=tuple(path.resolve() for path in extra_dirs),
     )

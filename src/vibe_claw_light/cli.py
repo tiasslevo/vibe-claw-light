@@ -139,6 +139,8 @@ def main(argv: list[str] | None = None, default_root: Path | None = None) -> int
                 raise ValueError("Utilisez /forget dans Telegram ou arrêtez d'abord l'agent.")
             if not memory.forget(args.key):
                 raise ValueError("Oubli non confirmé : clé invalide, déjà oubliée ou mémoire indisponible.")
+            from .context import current_snapshot
+            current_snapshot(load_config(root, require_token=False))
             from .storage import read_json, write_json
             state_path = root / "data" / "state.json"
             state = read_json(state_path, None)

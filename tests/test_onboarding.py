@@ -4,7 +4,7 @@ from __future__ import annotations
 from contextlib import redirect_stdout
 import http.client
 import io
-import os
+import json
 from pathlib import Path
 import queue
 import tempfile
@@ -234,7 +234,7 @@ class WizardTests(unittest.TestCase):
         for allow in ("0", "1"):
             with self.subTest(allow=allow):
                 wizard = self.wizard(provider="claude")
-                self.configure(wizard, allow_shell=allow)
+                self.configure(wizard, allow_shell=allow, access_mode="workspace")
                 self.assertTrue(wait_until(lambda: wizard.phase == "pairing"))
                 self.fake.push(message(wizard.pair_code))
                 self.assertTrue(wizard.done.wait(3))
@@ -250,30 +250,146 @@ class WizardTests(unittest.TestCase):
         self.assertIn("python run.py stop", wizard.error)
         self.assertFalse((self.root / "config.env").exists())
 
-    def test_login_launches_only_selected_cli_and_preserves_instance_environment(self):
+    def test_login_launches_only_selected_cli(self):
         wizard = self.wizard(provider="claude", authenticated=False)
-        process = Mock()
-        process.poll.return_value = 0
-        with patch.dict(os.environ, {"VIBE_CLAW_ROOT": "/private/calling-instance"}), \
-                patch("vibe_claw_light.onboarding.subprocess.Popen", return_value=process) as popen, \
+        attempt = Mock()
+        attempt.poll.return_value = 0
+        with patch("vibe_claw_light.onboarding.start_login", return_value=attempt) as start, \
                 patch("vibe_claw_light.onboarding.auth_status", return_value=(True, "connected")), \
                 redirect_stdout(io.StringIO()):
             wizard.login()
             self.assertTrue(wait_until(lambda: wizard.phase == "configure"))
-        self.assertEqual(popen.call_args.args[0], ["test-cli", "auth", "login"])
-        self.assertEqual(popen.call_args.kwargs["env"]["VIBE_CLAW_ROOT"], "/private/calling-instance")
+        self.assertEqual(start.call_args.args[:3], (self.root, "claude", "test-cli"))
+        attempt.close.assert_called_once()
 
     def test_auth_failure_allows_retry(self):
         wizard = self.wizard(authenticated=False)
-        process = Mock()
-        process.poll.return_value = 1
-        with patch("vibe_claw_light.onboarding.subprocess.Popen", return_value=process), \
+        attempt = Mock()
+        attempt.poll.return_value = 1
+        with patch("vibe_claw_light.onboarding.start_login", return_value=attempt), \
                 patch("vibe_claw_light.onboarding.auth_status", return_value=(False, "no")), \
                 redirect_stdout(io.StringIO()):
             wizard.login()
             self.assertTrue(wait_until(lambda: bool(wizard.error)))
         self.assertEqual(wizard.phase, "auth")
         self.assertIn("réessayer", wizard.error)
+
+    def test_headless_login_shows_manual_command_and_can_be_rechecked(self):
+        wizard = self.wizard(provider="claude", authenticated=False)
+        with patch("vibe_claw_light.onboarding.start_login", return_value=None), \
+                patch("vibe_claw_light.onboarding.auth_status", return_value=(True, "connected")), \
+                redirect_stdout(io.StringIO()):
+            wizard.login()
+            self.assertTrue(wait_until(lambda: bool(wizard.error)))
+            self.assertEqual(wizard.phase, "auth")
+            self.assertIn("terminal", wizard.error)
+            self.assertIn("test-cli", wizard.render().decode())
+            self.assertIn("auth login", wizard.render().decode())
+            wizard.check_login()
+            self.assertTrue(wait_until(lambda: wizard.phase == "configure"))
+
+    def test_cancel_login_closes_attempt_without_starting_configuration(self):
+        wizard = self.wizard(authenticated=False)
+        attempt = Mock()
+        attempt.poll.return_value = None
+        with patch("vibe_claw_light.onboarding.start_login", return_value=attempt), \
+                patch("vibe_claw_light.onboarding.auth_status") as status, \
+                redirect_stdout(io.StringIO()):
+            wizard.login()
+            self.assertTrue(wait_until(lambda: wizard.auth_attempt is attempt))
+            wizard.cancel_login()
+            self.assertTrue(wait_until(lambda: wizard.auth_attempt is None))
+        self.assertEqual(wizard.phase, "auth")
+        attempt.cancel.assert_called_once()
+        attempt.close.assert_called_once()
+        status.assert_not_called()
+
+    def test_recheck_during_login_cannot_be_overwritten_by_late_failure(self):
+        wizard = self.wizard(authenticated=False)
+        attempt = Mock()
+        attempt.poll.return_value = None
+        with patch("vibe_claw_light.onboarding.start_login", return_value=attempt), \
+                patch("vibe_claw_light.onboarding.auth_status", return_value=(True, "connected")), \
+                redirect_stdout(io.StringIO()):
+            wizard.login()
+            self.assertTrue(wait_until(lambda: wizard.auth_attempt is attempt))
+            wizard.check_login()
+            self.assertTrue(wait_until(lambda: wizard.phase == "configure"))
+            self.assertTrue(wait_until(lambda: wizard.auth_attempt is None))
+        self.assertEqual(wizard.phase, "configure")
+        self.assertEqual(wizard.error, "")
+        attempt.cancel.assert_called_once()
+
+    def test_close_setup_cancels_an_interactive_login(self):
+        wizard = self.wizard(authenticated=False)
+        attempt = Mock()
+        attempt.poll.return_value = None
+        with patch("vibe_claw_light.onboarding.start_login", return_value=attempt), redirect_stdout(io.StringIO()):
+            wizard.login()
+            self.assertTrue(wait_until(lambda: wizard.auth_attempt is attempt))
+            wizard.close()
+        self.assertTrue(wizard.stop.is_set())
+        attempt.cancel.assert_called_once()
+        attempt.close.assert_called_once()
+
+    def test_late_negative_recheck_cannot_replace_a_successful_login(self):
+        wizard = self.wizard(authenticated=False)
+        attempt = Mock()
+        finished = threading.Event()
+        checking = threading.Event()
+        release_check = threading.Event()
+        attempt.poll.side_effect = lambda: 0 if finished.is_set() else None
+
+        def check_status(*_):
+            if not checking.is_set():
+                checking.set()
+                release_check.wait(3)
+                return False, "previous status"
+            return True, "connected"
+
+        with patch("vibe_claw_light.onboarding.start_login", return_value=attempt), \
+                patch("vibe_claw_light.onboarding.auth_status", side_effect=check_status), \
+                redirect_stdout(io.StringIO()):
+            try:
+                wizard.login()
+                self.assertTrue(wait_until(lambda: wizard.auth_attempt is attempt))
+                wizard.check_login()
+                self.assertTrue(checking.wait(1))
+                finished.set()
+                self.assertTrue(wait_until(lambda: wizard.phase == "configure"))
+            finally:
+                release_check.set()
+            self.assertTrue(wait_until(lambda: not wizard.checking_login))
+        self.assertEqual(wizard.phase, "configure")
+        self.assertEqual(wizard.error, "")
+
+    def test_existing_workspace_mode_and_extra_directories_are_not_silently_widened(self):
+        extra = str(self.root / "archive")
+        (self.root / "archive").mkdir()
+        save_config(self.root, {"ACCESS_MODE": "workspace", "EXTRA_DIRS": json.dumps([extra]),
+                               "TELEGRAM_TOKEN": TOKEN, "TELEGRAM_OWNER_ID": "42", "TELEGRAM_CHAT_ID": "42"})
+        wizard = self.wizard()
+        self.assertIn('value="workspace" selected', wizard.render().decode())
+        self.configure(wizard, token="", keep_owner="1")
+        self.assertTrue(wizard.done.wait(3))
+        values = read_values(self.root)
+        self.assertEqual(values["ACCESS_MODE"], "workspace")
+        self.assertEqual(json.loads(values["EXTRA_DIRS"]), [extra])
+
+    def test_first_install_can_choose_personal_or_workspace(self):
+        wizard = self.wizard()
+        self.assertEqual(wizard.access_mode, "personal")
+        self.configure(wizard, access_mode="personal")
+        self.assertTrue(wait_until(lambda: wizard.phase == "pairing"))
+        self.fake.push(message(wizard.pair_code))
+        self.assertTrue(wizard.done.wait(3))
+        self.assertEqual(load_config(self.root).access_mode, "personal")
+
+    def test_unknown_access_mode_does_not_start_pairing(self):
+        wizard = self.wizard()
+        self.configure(wizard, access_mode="administrator")
+        self.assertEqual(wizard.phase, "configure")
+        self.assertIn("mode d'accès", wizard.error)
 
     def test_setup_refuses_running_instance_before_auth(self):
         with FileLock(self.root / "data" / "service.lock"), \

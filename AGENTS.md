@@ -15,3 +15,15 @@ ajoutée aux sources, tests, exemples ou commits.
 - Vérifier les changements avec : PYTHONPATH=src python -m unittest discover -s tests.
   Sous Windows : $env:PYTHONPATH='src'; python -m unittest discover -s tests.
 - Ne pas annoncer de validation réelle d'un fournisseur à partir d'un test simulé.
+
+## Sources de comportement
+
+- Règles de l'assistant Telegram : `src/vibe_claw_light/instructions.txt`.
+- Protocole et validation de mémoire : `src/vibe_claw_light/memory.py`.
+- Assemblage du contexte : `src/vibe_claw_light/context.py`.
+- Lire `docs/ARCHITECTURE.md` avant de modifier les sessions ou les permissions,
+  et `docs/MEMOIRE.md` avant de modifier les souvenirs.
+- Garder une seule source pour chaque règle runtime ; ne pas recopier ces
+  consignes intégralement dans `AGENTS.md` et `CLAUDE.md`.
+- Une mise à jour ne doit pas élargir les accès des configurations existantes.
+- La mémoire commune reste indépendante des mémoires natives des CLI.
