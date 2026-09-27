@@ -10,7 +10,7 @@ Tu choisis **Codex ou Claude Code**. Un seul compte compatible et un seul moteur
 
 Il te faut un ordinateur connecté, Telegram et un accès au CLI choisi. L'abonnement à une application de chat ne garantit pas tous les usages du CLI : [vérifie les prérequis](docs/INSTALLATION.md#compte-et-ordinateur).
 
-1. Télécharge la [version `v0.1.0`](https://github.com/BorisJunior/vibe-claw-light/releases/tag/v0.1.0) et extrais l'archive dans un dossier que tu garderas.
+1. Télécharge la [version `v0.1.0`](https://github.com/tiasslevo/vibe-claw-light/releases/tag/v0.1.0) et extrais l'archive dans un dossier que tu garderas.
 2. **Windows :** double-clique sur `install.cmd`. **macOS/Linux :** ouvre un terminal dans le dossier et lance `bash scripts/install.sh`.
 3. Choisis `codex` ou `claude`, connecte ton compte et suis les indications pour créer ton bot avec [BotFather](https://t.me/BotFather).
 4. Saisis le token dans la page de configuration locale ouverte dans ton navigateur, ouvre le lien d'association Telegram puis écris à ton bot.

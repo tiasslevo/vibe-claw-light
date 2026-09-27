@@ -17,12 +17,12 @@ WSL, Node, Git et Python ne sont pas des prérequis de notre parcours Windows pa
 
 ## Récupérer la version initiale
 
-Télécharge le code source de la [release `v0.1.0`](https://github.com/BorisJunior/vibe-claw-light/releases/tag/v0.1.0), puis extrais toute l'archive. Utilise un dossier local durable, par exemple `Documents\vibe-claw-light`. Évite de le lancer depuis l'intérieur du ZIP ou depuis un dossier temporaire.
+Télécharge le code source de la [release `v0.1.0`](https://github.com/tiasslevo/vibe-claw-light/releases/tag/v0.1.0), puis extrais toute l'archive. Utilise un dossier local durable, par exemple `Documents\vibe-claw-light`. Évite de le lancer depuis l'intérieur du ZIP ou depuis un dossier temporaire.
 
 Si tu utilises Git :
 
 ```sh
-git clone --branch v0.1.0 --depth 1 https://github.com/BorisJunior/vibe-claw-light.git
+git clone --branch v0.1.0 --depth 1 https://github.com/tiasslevo/vibe-claw-light.git
 cd vibe-claw-light
 ```
 

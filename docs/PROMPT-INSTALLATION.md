@@ -6,14 +6,14 @@ Le prompt utilise la première release `v0.1.0`. Si cette release n'est pas disp
 
 ```text
 Installe Vibe Claw Light sur mon ordinateur depuis :
-https://github.com/BorisJunior/vibe-claw-light
+https://github.com/tiasslevo/vibe-claw-light
 Version exacte : v0.1.0
 
 Je ne suis pas technique. Explique simplement ce que tu fais et guide-moi pour les interventions qui demandent ma présence.
 
 1. Détecte mon système. Demande-moi de choisir Codex ou Claude Code si mon choix n'est pas encore clair. Un seul moteur est nécessaire ; installe uniquement celui que je choisis. Il me faut un compte autorisant l'usage du CLI choisi. Ne suppose pas qu'un compte gratuit suffit et ne bascule jamais automatiquement vers une API payante.
 
-2. Récupère exactement le tag v0.1.0 dans un nouveau dossier local durable nommé vibe-claw-light. Si Git est disponible, utilise git clone --branch v0.1.0 --depth 1. Sinon, télécharge l'archive https://github.com/BorisJunior/vibe-claw-light/archive/refs/tags/v0.1.0.zip puis extrais-la. Place le téléchargement temporaire hors de la racine du projet et supprime-le après extraction. N'écrase aucun dossier existant : commence par inspecter son état. Si le tag est indisponible, arrête cette étape et signale-le.
+2. Récupère exactement le tag v0.1.0 dans un nouveau dossier local durable nommé vibe-claw-light. Si Git est disponible, utilise git clone --branch v0.1.0 --depth 1. Sinon, télécharge l'archive https://github.com/tiasslevo/vibe-claw-light/archive/refs/tags/v0.1.0.zip puis extrais-la. Place le téléchargement temporaire hors de la racine du projet et supprime-le après extraction. N'écrase aucun dossier existant : commence par inspecter son état. Si le tag est indisponible, arrête cette étape et signale-le.
 
 3. Lis README.md, AGENTS.md s'il existe, et docs/INSTALLATION.md. Utilise les installateurs fournis. Sur Windows, lance install.cmd -Provider codex ou install.cmd -Provider claude ; tu peux définir VCL_NO_PAUSE=1 uniquement pour ce processus afin de supprimer sa pause finale. Sur macOS/Linux, utilise bash scripts/install.sh suivi du moteur choisi. Le setup ouvre une page de configuration locale dans mon navigateur. Ne réinvente pas cette procédure. Préserve VIBE_CLAW_ROOT s'il est déjà défini : il peut appartenir à une autre instance. N'importe aucune identité, configuration ou donnée d'une autre installation.
 

@@ -15,7 +15,7 @@ Préparation du 27 septembre 2026. Ces vérifications concernent le code du star
 
 La suite vérifie notamment l'autorisation du compte Telegram, l'association par lien temporaire, les protections du formulaire local, la mémoire et ses corrections, la persistance des messages, l'arrêt des processus, `/clear`, `/reload` et l'isolation entre installations. Les appels Telegram et les flux des modèles y sont simulés. Les appels réels aux modèles mentionnés ci-dessus ont été effectués séparément.
 
-Le workflow [Tests](https://github.com/BorisJunior/vibe-claw-light/actions/workflows/tests.yml) exécute aussi la suite et la construction du paquet sur Linux, Windows et macOS à chaque push. Il ne se connecte à aucun compte de modèle ni bot Telegram.
+Le workflow [Tests](https://github.com/tiasslevo/vibe-claw-light/actions/workflows/tests.yml) exécute aussi la suite et la construction du paquet sur Linux, Windows et macOS à chaque push. Il ne se connecte à aucun compte de modèle ni bot Telegram.
 
 ## Ce qui reste à répéter avant une présentation
 
