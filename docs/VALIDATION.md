@@ -12,7 +12,7 @@ L'héritage de modules PowerShell 7 incompatibles empêchait Windows PowerShell 
 
 | Vérification | Environnement et résultat |
 | --- | --- |
-| Suite locale | 196 tests découverts sous Linux ; 176 exécutés avec succès, 20 ignorés car réservés à Windows ou aux navigateurs optionnels. |
+| Suite locale | 197 tests découverts sous Linux ; 177 exécutés avec succès, 20 ignorés car réservés à Windows ou aux navigateurs optionnels. |
 | Navigateur Linux | 12 tests réussis dans Chromium 149.0.7827.55 avec Playwright 1.63.0. Vrai serveur HTTP et vrais clics, sans fabriquer l'en-tête Origin. |
 | Navigateur Windows | Les mêmes 12 tests réussis dans Edge 154.0.4258.37 sur Windows natif, depuis une copie temporaire des sources publiques. |
 | Formulaires | Connexion, vérification et détection automatique d'un login manuel, annulation, configuration, association, reprise après erreur, modification des réglages, démarrage et fin. Ancien onglet après redémarrage du serveur, CSRF incorrect et absence de token dans le HTML également vérifiés. |

@@ -13,6 +13,7 @@ import time
 import unittest
 from unittest.mock import Mock, patch
 from types import SimpleNamespace
+from itertools import count
 from urllib.parse import urlencode
 
 from vibe_claw_light.config import load_config, read_values, save_config
@@ -444,6 +445,32 @@ class WizardTests(unittest.TestCase):
             wizard.refresh_login()
         auth.assert_not_called()
         self.assertEqual(wizard.phase, "auth")
+
+    def test_ready_setup_keeps_page_available_for_first_telegram_trial(self):
+        wizard = self.wizard()
+        wizard.done.set()
+        wizard.result = 0
+        server = Mock(url="http://127.0.0.1/private-test/")
+        requests = []
+
+        def handle_request():
+            requests.append(True)
+            if len(requests) == 3:
+                wizard.stop.set()  # La personne clique enfin sur Terminer.
+
+        server.handle_request.side_effect = handle_request
+        ticks = count(step=15)
+        with patch("vibe_claw_light.onboarding.Wizard", return_value=wizard), \
+                patch("vibe_claw_light.onboarding.WizardServer", return_value=server), \
+                patch("vibe_claw_light.onboarding.find_cli", return_value="test-cli"), \
+                patch("vibe_claw_light.onboarding.executable_command", return_value=["test-cli"]), \
+                patch("vibe_claw_light.onboarding.auth_status", return_value=(True, "connected")), \
+                patch("vibe_claw_light.onboarding.webbrowser.open"), \
+                patch("vibe_claw_light.onboarding.time.monotonic", side_effect=lambda: next(ticks)), \
+                redirect_stdout(io.StringIO()):
+            self.assertEqual(setup(self.root, "codex"), 0)
+        self.assertEqual(len(requests), 3)
+        server.server_close.assert_called_once()
 
 
 class HttpTests(unittest.TestCase):

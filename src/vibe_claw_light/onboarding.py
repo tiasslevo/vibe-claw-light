@@ -605,10 +605,8 @@ def setup(root: Path, provider: str | None = None) -> int:
                     if completed_at is None:
                         completed_at = time.monotonic()
                         print("Assistant prêt : Telegram associé, modèle testé, service démarré. Vous pouvez lui écrire dans Telegram.", flush=True)
-                    # Laisser le navigateur charger la page finale sans garder
-                    # le terminal occupé si l'utilisateur ferme son onglet.
-                    if time.monotonic() - completed_at > 20:
-                        break
+                    # Garder le formulaire disponible pendant le premier essai
+                    # Telegram, jusqu'à Terminer ou à la limite du setup.
             if not wizard.done.is_set():
                 print("Configuration expirée. Relancez setup pour recommencer ; votre mémoire est conservée.")
             return wizard.result
