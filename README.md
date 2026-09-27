@@ -4,13 +4,13 @@ Ton assistant personnel sur Telegram, relié à ton ordinateur. Il peut lire tes
 
 Tu choisis **Codex ou Claude Code**. Un seul compte compatible et un seul moteur installé suffisent. Le modèle tourne chez le fournisseur ; aucun GPU ni modèle local à installer.
 
-**Version : `v0.3.1`.** Windows 11 est la cible principale, avec des scripts aussi pour macOS et Linux. Les tests et leurs limites sont détaillés dans [le relevé de validation](docs/VALIDATION.md). Prévois une répétition avec ton propre bot avant un atelier.
+**Version : `v0.3.2`.** Windows 11 est la cible principale, avec des scripts aussi pour macOS et Linux. Les tests et leurs limites sont détaillés dans [le relevé de validation](docs/VALIDATION.md). Prévois une répétition avec ton propre bot avant un atelier.
 
 ## Démarrer
 
 Il te faut un ordinateur connecté, Telegram et un accès au CLI choisi. L'abonnement à une application de chat ne garantit pas tous les usages du CLI : [vérifie les prérequis](docs/INSTALLATION.md#compte-et-ordinateur).
 
-1. Télécharge la [version `v0.3.1`](https://github.com/tiasslevo/vibe-claw-light/releases/tag/v0.3.1) et extrais l'archive dans un dossier que tu garderas.
+1. Télécharge la [version `v0.3.2`](https://github.com/tiasslevo/vibe-claw-light/releases/tag/v0.3.2) et extrais l'archive dans un dossier que tu garderas.
 2. **Windows :** double-clique sur `install.cmd`. **macOS/Linux :** ouvre un terminal dans le dossier et lance `bash scripts/install.sh`.
 3. Choisis `codex` ou `claude`. Si nécessaire, termine la connexion dans le terminal et sur le site officiel. Tout code à recopier se colle dans ce terminal.
 4. Crée ton bot avec [BotFather](https://t.me/BotFather), saisis son token dans la page locale de configuration, puis ouvre le lien d'association Telegram.
@@ -19,6 +19,8 @@ Il te faut un ordinateur connecté, Telegram et un accès au CLI choisi. L'abonn
 L'installateur récupère Python et le moteur choisi s'ils manquent. La page suit les vérifications et le démarrage. Si une étape bloque, elle indique laquelle et permet de la reprendre. Un test modèle réussi est réutilisé pendant quinze minutes si sa configuration reste identique. Ferme le terminal une fois l'assistant prêt ; le PC doit rester allumé, connecté et hors veille.
 
 Tu préfères te faire guider par Codex ou Claude Code ? Copie le [prompt d'installation](docs/PROMPT-INSTALLATION.md) dans une session locale de ton outil.
+
+Ton assistant est déjà installé ou tu lui as ajouté des fonctionnalités ? Utilise le [guide de mise à jour](docs/MISE-A-JOUR.md) pour conserver ses réglages, sa mémoire et tes ajouts.
 
 ## Ce que tu peux lui demander
 
@@ -54,6 +56,8 @@ Après un redémarrage du PC, utilise `start.cmd` sous Windows ou `bash start.sh
 
 Le bot traite les messages texte et les documents d'un seul compte Telegram associé. Les fichiers reçus ou envoyés sont limités à 20 Mio. Leur lecture dépend des capacités du moteur et des outils présents ; commence par des fichiers texte. Il reprend sa conversation, conserve une mémoire personnelle et redémarre via `/reload`.
 
+Pendant une tâche, un message d'activité indique les lectures, modifications, recherches et actions sur l'ordinateur. Il se met à jour puis reste visible au-dessus de la réponse finale. Les commandes et les détails techniques n'y figurent pas. Les réponses sont mises en forme pour Telegram, et l'assistant explique d'abord le résultat et son utilisation. Tu peux lui demander davantage de détails si besoin.
+
 Les nouvelles installations proposent **Documents/MonAssistant** pour ranger les nouveaux travaux. Le mode **Assistant personnel** permet aussi de travailler dans les autres projets de ton dossier utilisateur, avec les commandes et le réseau actifs. Le mode **Limité aux dossiers choisis** reste disponible. Codex conserve son sandbox `workspace-write` ; les autorisations d'outils de Claude ne constituent pas une sandbox système Windows. [Détail des accès](docs/INSTALLATION.md#dossier-de-rangement-et-accès).
 
 Les livrables peuvent être envoyés depuis les dossiers autorisés ; l'envoi des emplacements d'authentification connus et des données internes du starter est bloqué. Une mise à jour depuis la v0.1 conserve son dossier et son ancien mode d'accès tant que tu ne les changes pas.
@@ -63,6 +67,7 @@ Cette version reste légère : pas de veille Twitter, de vocal, de modèle local
 Tes messages passent par Telegram et le moteur choisi ; les données utiles à la tâche sont envoyées à ce moteur. La configuration, les conversations et la mémoire locales restent hors Git. Le token Telegram se saisit localement et ne doit jamais apparaître dans un prompt partagé.
 
 - [Installation et diagnostic](docs/INSTALLATION.md)
+- [Mettre à jour en conservant ses ajouts](docs/MISE-A-JOUR.md)
 - [Ajouter ou changer de moteur](docs/MOTEURS.md)
 - [Mémoire personnelle](docs/MEMOIRE.md)
 - [Démo de masterclass](docs/DEMO-MASTERCLASS.md)

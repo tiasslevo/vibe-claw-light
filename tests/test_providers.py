@@ -74,7 +74,8 @@ class ProviderTests(unittest.TestCase):
         with patch.dict(os.environ, {"PATH": str(npm) + os.pathsep + str(native)}):
             self.assertEqual(find_cli("codex"), str(exe))
 
-    def run_fake(self, events, *, provider="codex", stderr="", code=0, prompt="Lis le résumé de Zoé 📚", cancel=None):
+    def run_fake(self, events, *, provider="codex", stderr="", code=0, prompt="Lis le résumé de Zoé 📚", cancel=None,
+                 on_progress=None, maintenance=False):
         proc = FakeProcess(events, stderr, code)
         seen = []
         runner = ProviderRunner(replace(self.config, provider=provider))
@@ -82,7 +83,8 @@ class ProviderTests(unittest.TestCase):
              patch("vibe_claw_light.providers.subprocess.Popen", return_value=proc) as popen, \
              patch("vibe_claw_light.providers.stop_tree") as stop, \
              patch("vibe_claw_light.providers.WindowsJob"):
-            result = runner.run(prompt, cancel=cancel, on_session=seen.append)
+            result = runner.run(prompt, cancel=cancel, on_session=seen.append,
+                                on_progress=on_progress, maintenance=maintenance)
         self.assertIsNone(runner.process)
         return result, proc, popen, stop, seen
 
@@ -195,6 +197,41 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(proc.stdin.sent, prompt)
         self.assertNotIn(prompt, popen.call_args.args[0])
         self.assertFalse(popen.call_args.kwargs.get("shell", False))
+
+    def test_codex_tool_activity_excludes_commands_paths_outputs_and_reasoning(self):
+        progress = []
+        events = [
+            {"type": "item.started", "item": {"id": "cmd1", "type": "command_execution", "command": "SECRET_COMMAND"}},
+            {"type": "item.completed", "item": {"id": "cmd1", "type": "command_execution", "aggregated_output": "SECRET_OUTPUT"}},
+            {"type": "item.completed", "item": {"id": "edit1", "type": "file_change", "changes": [{"path": "SECRET_PATH"}]}},
+            {"type": "item.completed", "item": {"id": "think", "type": "reasoning", "text": "SECRET_THOUGHT"}},
+            {"type": "item.completed", "item": {"id": "answer", "type": "agent_message", "text": "Prêt."}},
+        ]
+        result, *_ = self.run_fake(events, on_progress=progress.append)
+        self.assertEqual(result.text, "Prêt.")
+        self.assertEqual([(p.kind, p.key) for p in progress],
+                         [("command", "cmd1"), ("command", "cmd1"), ("write", "edit1")])
+        self.assertNotIn("SECRET", repr(progress))
+        progress.clear()
+        self.run_fake(events, on_progress=progress.append, maintenance=True)
+        self.assertEqual(progress, [])
+
+    def test_claude_tool_activity_excludes_inputs_and_partial_tool_arguments(self):
+        progress = []
+        tool = {"id": "read1", "type": "tool_use", "name": "Read", "input": {"file_path": "SECRET_PATH"}}
+        events = [
+            {"type": "stream_event", "event": {"type": "content_block_start", "content_block": tool}},
+            {"type": "stream_event", "event": {"type": "content_block_delta", "delta": {"partial_json": "SECRET_PARTIAL"}}},
+            {"type": "assistant", "message": {"content": [tool]}},
+            {"type": "assistant", "message": {"content": [{"id": "bash1", "type": "tool_use", "name": "Bash", "input": {"command": "SECRET_COMMAND"}}]}},
+            {"type": "user", "message": {"content": [{"type": "tool_result", "content": "SECRET_OUTPUT"}]}},
+            {"type": "result", "result": "Prêt.", "is_error": False},
+        ]
+        result, *_ = self.run_fake(events, provider="claude", on_progress=progress.append)
+        self.assertEqual(result.text, "Prêt.")
+        self.assertEqual([(p.kind, p.key) for p in progress],
+                         [("read", "read1"), ("read", "read1"), ("command", "bash1")])
+        self.assertNotIn("SECRET", repr(progress))
 
     def test_claude_stream_extracts_final_result_without_tool_data(self):
         events = [

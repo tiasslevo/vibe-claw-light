@@ -1,6 +1,6 @@
 # Démo finale : un assistant qui retrouve son travail
 
-Prévoir 10 à 15 minutes de démonstration après l'installation de la v0.3.1. Les participants choisissent leur moteur ; un compte Codex ou Claude Code compatible suffit.
+Prévoir 10 à 15 minutes de démonstration après l'installation de la v0.3.2. Les participants choisissent leur moteur ; un compte Codex ou Claude Code compatible suffit.
 
 ## Préparer avant la séance
 

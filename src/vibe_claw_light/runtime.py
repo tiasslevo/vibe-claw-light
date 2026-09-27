@@ -16,6 +16,7 @@ from .config import Config, save_config
 from .context import current_snapshot, native_context
 from .memory import MemoryStore, extract_memory
 from .providers import ProviderRunner, auth_status, find_cli, redact_secrets, safe_error
+from .progress import ToolProgress
 from .storage import FileLock, read_json, write_json
 from .telegram import Telegram, TelegramError
 
@@ -71,7 +72,7 @@ class Bot:
         self.exit_code = 0
         self.generation = 0
         self.running = False
-        self.last_progress = 0.0
+        self.tool_progress: ToolProgress | None = None
         self.state_path = config.data / "state.json"
         self.load_state()
 
@@ -110,6 +111,14 @@ class Bot:
                 self.telegram.send(self.config.chat_id, redact_secrets(text, self.config))
             except TelegramError as exc:
                 print(f"Telegram : {exc}", flush=True)
+
+    def send_activity(self, text: str):
+        with self.outbound:
+            return self.telegram.send_plain(self.config.chat_id, text)
+
+    def edit_activity(self, message_id: int, text: str):
+        with self.outbound:
+            self.telegram.edit(self.config.chat_id, message_id, text)
 
     def ingest(self, update: dict):
         with self.mutex:
@@ -381,6 +390,8 @@ class Bot:
                 self.cancel = threading.Event()
                 cancel = self.cancel
                 generation = self.generation
+                activity = ToolProgress(self.send_activity, self.edit_activity)
+                self.tool_progress = activity
                 session_id = self.state["sessions"].get(self.config.provider)
                 self.persist()
             def remember_session(sid):
@@ -388,13 +399,12 @@ class Bot:
                     if generation == self.generation:
                         self.state["sessions"][self.config.provider] = sid
                         self.persist()
-            def progress(message):
+            def progress(event):
                 with self.mutex:
-                    if generation != self.generation:
+                    if generation != self.generation or cancel.is_set():
                         return
-                if time.monotonic() - self.last_progress > 25:
-                    self.last_progress = time.monotonic()
-                    self.send(message)
+                    activity.record(event)
+                    activity.flush()
             try:
                 self.attachments(task)
                 if cancel.is_set():
@@ -406,6 +416,7 @@ class Bot:
                 with self.mutex:
                     if result.cancelled or generation != self.generation:
                         continue
+                    activity.flush(force=True)
                     current_session = self.state["sessions"].get(self.config.provider)
                     if current_session and not result.error:
                         self.state["context_revisions"][self.config.provider] = {
@@ -440,6 +451,7 @@ class Bot:
                     if generation == self.generation:
                         self.state["active"] = None
                     self.running = False
+                    self.tool_progress = None
                     self.persist()
                     if self.state["queue"] and not self.state["paused"]:
                         self.wake.set()
@@ -469,6 +481,9 @@ class Bot:
     def ticker(self):
         while not self.done.wait(5):
             if self.running:
+                with self.mutex:
+                    if self.tool_progress and not self.cancel.is_set():
+                        self.tool_progress.flush()
                 try:
                     self.telegram.typing(self.config.chat_id)
                 except TelegramError:

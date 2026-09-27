@@ -12,12 +12,12 @@ Les parcours réellement vérifiés et leurs limites figurent dans [VALIDATION.m
 
 ## Récupérer la version
 
-Télécharge la [release `v0.3.1`](https://github.com/tiasslevo/vibe-claw-light/releases/tag/v0.3.1) et extrais toute l'archive dans un dossier durable, par exemple `Documents\vibe-claw-light`. Ne lance pas l'installation à l'intérieur du ZIP.
+Télécharge la [release `v0.3.2`](https://github.com/tiasslevo/vibe-claw-light/releases/tag/v0.3.2) et extrais toute l'archive dans un dossier durable, par exemple `Documents\vibe-claw-light`. Ne lance pas l'installation à l'intérieur du ZIP. Pour une installation déjà personnalisée, suis le [guide de mise à jour](MISE-A-JOUR.md).
 
 Avec Git :
 
 ```sh
-git clone --branch v0.3.1 --depth 1 https://github.com/tiasslevo/vibe-claw-light.git
+git clone --branch v0.3.2 --depth 1 https://github.com/tiasslevo/vibe-claw-light.git
 cd vibe-claw-light
 ```
 

@@ -10,7 +10,9 @@ from unittest.mock import patch
 from vibe_claw_light.config import Config, read_values, save_config
 from vibe_claw_light.context import current_snapshot, native_context
 from vibe_claw_light.providers import Result
+from vibe_claw_light.progress import Activity
 from vibe_claw_light.runtime import Bot, RELOAD
+from vibe_claw_light.telegram import TelegramError
 from vibe_claw_light.storage import FileLock, read_json, write_json
 
 
@@ -19,11 +21,20 @@ class FakeTelegram:
         self.messages = []
         self.documents = []
         self.on_send = None
+        self.edits = []
 
     def send(self, chat_id, text):
         if self.on_send:
             self.on_send(text)
         self.messages.append((chat_id, text))
+
+    def send_plain(self, chat_id, text):
+        self.send(chat_id, text)
+        return len(self.messages)
+
+    def edit(self, chat_id, message_id, text):
+        self.edits.append((chat_id, message_id, text))
+        self.messages[message_id - 1] = (chat_id, text)
 
     def send_document(self, chat_id, path):
         self.documents.append((chat_id, path))
@@ -182,6 +193,47 @@ class RuntimeTests(unittest.TestCase):
         self.bot.ingest(self.update(text="Bonjour"))
         self.run_once(Result("Bonjour !"))
         self.assertEqual(self.telegram.messages, [(123, "Bonjour !")])
+
+    def test_activity_remains_separate_from_final_answer_and_is_not_duplicated(self):
+        bot = self.bot
+
+        class Runner:
+            def run(self, prompt, session_id, cancel, on_session, on_progress):
+                on_progress(Activity("read", "one"))
+                on_progress(Activity("read", "one"))
+                on_progress(Activity("write", "two"))
+                on_progress(Activity("command", "three"))
+                bot.done.set()
+                return Result("Vous pouvez maintenant envoyer un vocal.")
+
+        bot.runner_factory = lambda config: Runner()
+        bot.ingest(self.update())
+        bot.work()
+        self.assertEqual(len(self.telegram.messages), 2)
+        activity, answer = [text for _, text in self.telegram.messages]
+        self.assertIn("Lecture de fichiers", activity)
+        self.assertIn("Modification de fichiers", activity)
+        self.assertIn("Action sur l’ordinateur", activity)
+        self.assertNotIn("× 2", activity)
+        self.assertEqual(answer, "Vous pouvez maintenant envoyer un vocal.")
+        self.assertTrue(self.telegram.edits)
+
+    def test_activity_network_failure_does_not_hide_final_answer(self):
+        bot = self.bot
+
+        class Runner:
+            def run(self, prompt, session_id, cancel, on_session, on_progress):
+                on_progress(Activity("read", "one"))
+                on_progress(Activity("write", "two"))
+                bot.done.set()
+                return Result("Votre document est prêt.")
+
+        bot.runner_factory = lambda config: Runner()
+        bot.ingest(self.update())
+        with patch.object(self.telegram, "send_plain", side_effect=TelegramError(0, category="network")) as send:
+            bot.work()
+        self.assertEqual(send.call_count, 1)
+        self.assertEqual(self.telegram.messages, [(123, "Votre document est prêt.")])
 
     def test_worker_readiness_is_written_after_start_and_removed_on_exit(self):
         path = self.config.data / "worker.ready.json"

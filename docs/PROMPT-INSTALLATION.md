@@ -2,18 +2,18 @@
 
 Ouvre **Codex ou Claude Code en local sur ton ordinateur**, dans un dossier où il peut préparer un projet. Copie le texte ci-dessous. Garde ton navigateur, un terminal local et Telegram disponibles pour les étapes de connexion et d'association.
 
-Le prompt utilise la release exacte `v0.3.1`. Si elle n'est pas disponible, l'assistant doit le signaler au lieu de choisir une autre version.
+Le prompt utilise la release exacte `v0.3.2`. Si elle n'est pas disponible, l'assistant doit le signaler au lieu de choisir une autre version. Pour mettre à jour un assistant existant, utilise le [prompt de mise à jour](MISE-A-JOUR.md).
 
 ```text
 Installe Vibe Claw Light sur mon ordinateur depuis :
 https://github.com/tiasslevo/vibe-claw-light
-Version exacte : v0.3.1
+Version exacte : v0.3.2
 
 Je ne suis pas technique. Explique simplement ce que tu fais et accompagne-moi pour les étapes qui demandent ma présence.
 
 1. Détecte mon système. Demande-moi de choisir Codex ou Claude Code si mon choix n'est pas clair. Un seul moteur est nécessaire : installe seulement celui choisi. Vérifie que mon compte autorise son CLI. Ne suppose pas qu'un compte gratuit suffit et ne bascule jamais automatiquement vers une API payante.
 
-2. Récupère exactement le tag v0.3.1 dans un nouveau dossier local durable nommé vibe-claw-light. Avec Git : git clone --branch v0.3.1 --depth 1 https://github.com/tiasslevo/vibe-claw-light.git. Sinon, télécharge https://github.com/tiasslevo/vibe-claw-light/archive/refs/tags/v0.3.1.zip et extrais-le. Garde le téléchargement temporaire hors de la racine du projet, puis supprime-le après extraction. Inspecte tout dossier existant avant d'y toucher. Si le tag est indisponible, signale-le et arrête cette étape.
+2. Récupère exactement le tag v0.3.2 dans un nouveau dossier local durable nommé vibe-claw-light. Avec Git : git clone --branch v0.3.2 --depth 1 https://github.com/tiasslevo/vibe-claw-light.git. Sinon, télécharge https://github.com/tiasslevo/vibe-claw-light/archive/refs/tags/v0.3.2.zip et extrais-le. Garde le téléchargement temporaire hors de la racine du projet, puis supprime-le après extraction. Inspecte tout dossier existant avant d'y toucher. Si une installation existe déjà, conserve-la et suis docs/MISE-A-JOUR.md ; ne l'écrase pas avec l'archive neuve. Si le tag est indisponible, signale-le et arrête cette étape.
 
 3. Lis README.md, AGENTS.md et docs/INSTALLATION.md. Sur Windows, utilise install.cmd -Provider codex ou install.cmd -Provider claude ; VCL_NO_PAUSE=1 peut supprimer la pause finale pour ce processus uniquement. Sur macOS/Linux, utilise bash scripts/install.sh suivi du moteur. Ne réinvente pas le setup. Préserve VIBE_CLAW_ROOT s'il existe : il peut appartenir à une autre instance. N'importe aucune identité, configuration ou donnée d'un autre assistant.
 

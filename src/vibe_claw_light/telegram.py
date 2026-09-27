@@ -14,6 +14,8 @@ import urllib.request
 import uuid
 from typing import Callable, TypeVar
 
+from .formatting import format_messages, plain_chunks, utf16_length
+
 
 _MESSAGES = {
     "dns": "Le nom du serveur Telegram ne peut pas être résolu (DNS). Vérifiez la connexion réseau.",
@@ -28,6 +30,8 @@ _MESSAGES = {
     "server": "Telegram rencontre une erreur serveur temporaire (5xx).",
     "internal": "La réponse Telegram est invalide ou une erreur interne a interrompu le contrôle.",
     "cancelled": "Vérification Telegram annulée.",
+    "formatting": "Telegram n'a pas accepté la mise en forme du message.",
+    "not_modified": "Le message Telegram contient déjà ce texte.",
 }
 
 
@@ -35,6 +39,18 @@ def _http_category(code: int) -> str:
     return {401: "unauthorized", 403: "forbidden", 409: "conflict", 429: "rate_limit"}.get(
         code, "server" if 500 <= code <= 599 else "internal"
     )
+
+
+def _response_category(code: int, description: object = "") -> str:
+    # Inspect only known refusal signatures. The response body is never retained
+    # in the exception, a log, or a user-facing diagnostic.
+    if code == 400 and isinstance(description, str):
+        hint = description.lower()
+        if hint.startswith("bad request: can't parse entities"):
+            return "formatting"
+        if hint.startswith("bad request: message is not modified"):
+            return "not_modified"
+    return _http_category(code)
 
 
 class TelegramError(RuntimeError):
@@ -80,15 +96,18 @@ def _network_error(exc: BaseException) -> TelegramError:
 
 def _http_error(exc: urllib.error.HTTPError) -> TelegramError:
     retry = 0
+    category = _http_category(exc.code)
     try:
         payload = json.loads(exc.read(65536))
-        if isinstance(payload, dict) and isinstance(payload.get("parameters"), dict):
-            retry = payload["parameters"].get("retry_after", 0)
+        if isinstance(payload, dict):
+            category = _response_category(exc.code, payload.get("description"))
+            if isinstance(payload.get("parameters"), dict):
+                retry = payload["parameters"].get("retry_after", 0)
     except (ValueError, OSError, TypeError):
         pass
     finally:
         exc.close()
-    return TelegramError(exc.code, retry_after=retry)
+    return TelegramError(exc.code, retry_after=retry, category=category)
 
 
 _T = TypeVar("_T")
@@ -142,7 +161,8 @@ class Telegram:
             parameters = payload.get("parameters")
             retry = parameters.get("retry_after", 0) if isinstance(parameters, dict) else 0
             code = payload.get("error_code", 0)
-            raise TelegramError(code, retry_after=retry, category=_http_category(code) if isinstance(code, int) else "internal")
+            category = _response_category(code, payload.get("description")) if isinstance(code, int) else "internal"
+            raise TelegramError(code, retry_after=retry, category=category)
         if "result" not in payload:
             raise TelegramError(0, category="internal")
         return payload["result"]
@@ -157,20 +177,52 @@ class Telegram:
         return self.request("getUpdates", values, timeout=timeout + 10)
 
     def send(self, chat_id: int, text: str):
-        # Texte simple : aucune erreur de parsing Markdown sur une réponse du modèle.
         if not text.strip():
             return
-        for start in range(0, len(text), 3500):
-            values = {"chat_id": chat_id, "text": text[start:start + 3500]}
-            for attempt in range(2):
-                try:
-                    self.request("sendMessage", values)
-                    break
-                except TelegramError as exc:
-                    if exc.code == 429 and attempt == 0:
-                        time.sleep(min(max(exc.retry_after, 1), 30))
-                    else:
-                        raise
+        for chunk in format_messages(text):
+            try:
+                self._send_message({"chat_id": chat_id, "text": chunk.html, "parse_mode": "HTML"})
+            except TelegramError as exc:
+                if exc.category != "formatting":
+                    # A network failure may follow successful delivery. Never
+                    # resend an uncertain message as plain text and duplicate it.
+                    raise
+                for plain in plain_chunks(chunk.plain):
+                    self._send_message({"chat_id": chat_id, "text": plain})
+
+    def _send_message(self, values: dict):
+        for attempt in range(2):
+            try:
+                return self.request("sendMessage", values)
+            except TelegramError as exc:
+                if exc.code == 429 and attempt == 0:
+                    time.sleep(min(max(exc.retry_after, 1), 30))
+                else:
+                    raise
+
+    @staticmethod
+    def _check_plain_message(text: str) -> None:
+        if not text.strip() or utf16_length(text) > 4096:
+            raise ValueError("Un message de suivi doit contenir entre 1 et 4096 caractères Telegram.")
+
+    def send_plain(self, chat_id: int, text: str) -> int:
+        """Envoie un unique message court, éditable, sans interpréter de Markdown."""
+        self._check_plain_message(text)
+        result = self.request("sendMessage", {"chat_id": chat_id, "text": text}, timeout=5)
+        message_id = result.get("message_id") if isinstance(result, dict) else None
+        if not isinstance(message_id, int) or isinstance(message_id, bool):
+            raise TelegramError(0, category="internal")
+        return message_id
+
+    def edit(self, chat_id: int, message_id: int, text: str) -> None:
+        """Met à jour le suivi en texte brut, avec un délai réseau court."""
+        self._check_plain_message(text)
+        values = {"chat_id": chat_id, "message_id": message_id, "text": text}
+        try:
+            self.request("editMessageText", values, timeout=5)
+        except TelegramError as exc:
+            if exc.category != "not_modified":
+                raise
 
     def typing(self, chat_id: int):
         self.request("sendChatAction", {"chat_id": chat_id, "action": "typing"}, timeout=8)

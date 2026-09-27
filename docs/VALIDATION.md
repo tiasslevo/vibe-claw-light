@@ -2,6 +2,14 @@
 
 Préparation du 27 septembre 2026. Les tests du programme, les navigateurs réels et les comptes de modèles sont distingués ci-dessous.
 
+## Version 0.3.2
+
+Le suivi d'activité traite les événements des deux moteurs et garde un message récapitulatif au-dessus de la réponse finale. Le formatage Markdown est converti en HTML Telegram. Les consignes demandent une explication accessible du résultat et de son utilisation.
+
+Suite locale : 230 tests découverts sous Linux, dont 209 réussis et 21 ignorés (Windows ou navigateur optionnel). Elle inclut 13 tests de formatage, 16 tests Telegram, 6 tests du suivi et les cas d'intégration dans le runtime et les flux Codex/Claude. Les vérifications couvrent le découpage Unicode et HTML, les liens et le code, les erreurs de formatage, l'absence de renvoi sur une livraison réseau incertaine, la déduplication des outils, le regroupement des éditions, la conservation du suivi et l'annulation. Les comptes modèles et Telegram restent simulés ; aucun nouveau message réel n'a été envoyé pendant cette validation.
+
+Les règles natives changent avec les nouvelles consignes de communication : le rechargement ouvre une nouvelle conversation et conserve la mémoire durable. Le [guide de mise à jour](MISE-A-JOUR.md) demande de fusionner les modifications locales, y compris une éventuelle extension vocale, avant ce rechargement.
+
 ## Correctif 0.3.1
 
 Le rechargement complet toutes les trois secondes est remplacé par une vérification en arrière-plan. Le contenu reste intact tant que le rendu serveur ne change pas : le détail du lien Telegram reste ouvert et le texte sélectionné reste sélectionné. Le formulaire de saisie n'est pas sondé. Les transitions de connexion, d'association et de démarrage restent automatiques.

@@ -16,6 +16,7 @@ from typing import Callable
 from .config import Config
 from .context import context_file, native_context
 from .processes import WindowsJob, child_environment, spawn_options, stop_tree
+from .progress import Activity, activities
 
 
 def find_cli(provider: str, configured: str = "") -> str | None:
@@ -163,7 +164,7 @@ class ProviderRunner:
         self, prompt: str, session_id: str | None = None,
         cancel: threading.Event | None = None,
         on_session: Callable[[str], None] | None = None,
-        on_progress: Callable[[str], None] | None = None,
+        on_progress: Callable[[Activity], None] | None = None,
         *, maintenance: bool = False,
     ) -> Result:
         cancel = cancel or threading.Event()
@@ -234,6 +235,11 @@ class ProviderRunner:
                     event = json.loads(line)
                 except ValueError:
                     continue
+                if not isinstance(event, dict):
+                    continue
+                if on_progress and not maintenance:
+                    for activity in activities(self.config.provider, event):
+                        on_progress(activity)
                 event_type = event.get("type")
                 sid = event.get("thread_id") if event_type == "thread.started" else event.get("session_id")
                 if sid and re.fullmatch(r"[A-Za-z0-9_-]{8,128}", sid):

@@ -70,6 +70,12 @@ Les formulaires passent par les contrôles Host, Origin, chemin privé et CSRF. 
 
 Les parcours testés et leurs limites figurent dans [VALIDATION.md](VALIDATION.md). Les tests navigateur utilisent un serveur HTTP réel et des moteurs et bots fictifs : ils ne valident pas une authentification neuve ni un envoi Telegram réel.
 
+## Affichage Telegram
+
+Les événements d'outils Codex et Claude sont ramenés à des catégories fixes dans `progress.py`. Les identifiants dédupliquent les événements de début et de fin. Aucun argument, chemin, résultat d'outil ou texte de raisonnement n'est envoyé dans le suivi. Un seul message cumulatif par demande conserve les catégories et leur nombre d'actions ; les éditions sont espacées et les mises à jour restantes sont regroupées. Ce suivi décrit les outils sollicités, sans affirmer que chaque action a réussi. Une réponse simple sans outil ne produit pas d'acquittement automatique.
+
+La réponse finale est envoyée séparément. `formatting.py` transforme le Markdown usuel en HTML Telegram, échappe le HTML libre et découpe les réponses longues en messages aux balises équilibrées. Un refus explicite de mise en forme déclenche un envoi du texte lisible. Un échec réseau incertain ne déclenche pas cet envoi de secours, pour éviter les doublons. Le rendu reste une implémentation du Markdown usuel, sans dépendance externe ; ce n'est pas un moteur CommonMark complet.
+
 ## État local
 
 | Emplacement | Rôle |
