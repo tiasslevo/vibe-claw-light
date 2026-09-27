@@ -278,7 +278,7 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(self.wizard.phase, "configure")
         self.assert_no_browser_secret()
 
-    def test_manual_login_is_detected_by_browser_refresh_without_post(self):
+    def test_manual_login_is_detected_in_background_without_post(self):
         self.start_server(authenticated=False)
         self.wizard.enable_login_watch()
         posts = []
@@ -289,6 +289,37 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual(self.wizard.phase, "configure")
         self.assertEqual(posts, [])
         self.start_login.assert_not_called()
+
+    def test_background_checks_preserve_fields_and_selected_pairing_link(self):
+        self.start_server()
+        self.visit()
+        self.fill_configuration()
+        self.page.evaluate("window.setupDocumentPreserved = true")
+        self.page.wait_for_timeout(3300)
+        self.assertTrue(self.page.evaluate("window.setupDocumentPreserved === true"))
+        self.assertEqual(self.form("configure").locator('[name="name"]').input_value(), "Assistant de test")
+        self.assertEqual(self.form("configure").locator('[name="token"]').input_value(), TOKEN)
+        self.submit("configure")
+        link = self.page.locator('details .link')
+        self.page.locator('summary', has_text="Ouvrir le lien sur un autre appareil").click()
+        link.evaluate("""node => {
+            window.pairingMain = document.querySelector('main');
+            const range = document.createRange();
+            range.selectNodeContents(node);
+            getSelection().removeAllRanges();
+            getSelection().addRange(range);
+        }""")
+        for _ in range(2):
+            with self.page.expect_response(lambda response: response.url == self.server.url
+                                           and response.request.resource_type == "fetch"):
+                pass
+            self.page.wait_for_timeout(100)
+            self.assertTrue(self.page.evaluate("window.pairingMain === document.querySelector('main')"))
+            self.assertTrue(self.page.locator('details').evaluate("node => node.open"))
+            self.assertEqual(self.page.evaluate("getSelection().toString()"), self.wizard.pair_link)
+        self.fake.pair(self.wizard.pair_code)
+        self.form("finish").wait_for(state="visible")
+        self.assertEqual(self.wizard.phase, "ready")
 
     def test_login_button_and_cancellation_use_real_posts(self):
         self.start_server(authenticated=False)

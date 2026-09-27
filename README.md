@@ -4,13 +4,13 @@ Ton assistant personnel sur Telegram, relié à ton ordinateur. Il peut lire tes
 
 Tu choisis **Codex ou Claude Code**. Un seul compte compatible et un seul moteur installé suffisent. Le modèle tourne chez le fournisseur ; aucun GPU ni modèle local à installer.
 
-**Version : `v0.3.0`.** Windows 11 est la cible principale, avec des scripts aussi pour macOS et Linux. Les tests et leurs limites sont détaillés dans [le relevé de validation](docs/VALIDATION.md). Prévois une répétition avec ton propre bot avant un atelier.
+**Version : `v0.3.1`.** Windows 11 est la cible principale, avec des scripts aussi pour macOS et Linux. Les tests et leurs limites sont détaillés dans [le relevé de validation](docs/VALIDATION.md). Prévois une répétition avec ton propre bot avant un atelier.
 
 ## Démarrer
 
 Il te faut un ordinateur connecté, Telegram et un accès au CLI choisi. L'abonnement à une application de chat ne garantit pas tous les usages du CLI : [vérifie les prérequis](docs/INSTALLATION.md#compte-et-ordinateur).
 
-1. Télécharge la [version `v0.3.0`](https://github.com/tiasslevo/vibe-claw-light/releases/tag/v0.3.0) et extrais l'archive dans un dossier que tu garderas.
+1. Télécharge la [version `v0.3.1`](https://github.com/tiasslevo/vibe-claw-light/releases/tag/v0.3.1) et extrais l'archive dans un dossier que tu garderas.
 2. **Windows :** double-clique sur `install.cmd`. **macOS/Linux :** ouvre un terminal dans le dossier et lance `bash scripts/install.sh`.
 3. Choisis `codex` ou `claude`. Si nécessaire, termine la connexion dans le terminal et sur le site officiel. Tout code à recopier se colle dans ce terminal.
 4. Crée ton bot avec [BotFather](https://t.me/BotFather), saisis son token dans la page locale de configuration, puis ouvre le lien d'association Telegram.

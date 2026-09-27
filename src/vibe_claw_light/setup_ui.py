@@ -1,8 +1,49 @@
 """Interface locale autonome : aucune police, image ou ressource distante."""
 from html import escape
+import base64
+import hashlib
 import os
 
 from .auth import manual_command
+
+
+WATCH_SCRIPT = """
+(() => {
+  let timer;
+  let submitting = false;
+  let previous = document.querySelector('main').innerHTML;
+  document.addEventListener('submit', () => {
+    submitting = true;
+    clearTimeout(timer);
+  });
+  async function check() {
+    if (submitting) return;
+    try {
+      const response = await fetch(location.href, {cache: 'no-store'});
+      if (response.ok) {
+        const next = new DOMParser().parseFromString(await response.text(), 'text/html');
+        if (submitting) return;
+        const main = next.querySelector('main');
+        // Comparer au dernier rendu serveur, pas au DOM que la personne utilise.
+        // Ouvrir un détail ou sélectionner le lien doit rester sans effet ici.
+        if (main && main.innerHTML !== previous) {
+          previous = main.innerHTML;
+          document.querySelector('main').replaceWith(main);
+          const steps = next.querySelector('.steps');
+          if (steps) document.querySelector('.steps').replaceWith(steps);
+        }
+        // Le formulaire de saisie et les étapes terminées ne sont jamais sondés.
+        if (next.body.dataset.watch !== 'true') return;
+      }
+    } catch (_) {
+      // Une coupure passagère ne doit pas effacer la page courante.
+    }
+    if (!submitting) timer = setTimeout(check, 3000);
+  }
+  timer = setTimeout(check, 3000);
+})();
+"""
+WATCH_CSP = "'sha256-" + base64.b64encode(hashlib.sha256(WATCH_SCRIPT.encode()).digest()).decode() + "'"
 
 
 STYLE = """
@@ -36,16 +77,16 @@ def page(body: str, *, phase: str = "", provider: str = "", refresh: bool = Fals
             current = ' aria-current="step"' if index == stage else ""
             items.append(f'<li class="{state}"{current}><span>0{index + 1}</span>{label}</li>')
         steps = '<ol class="steps" aria-label="Étapes de l’installation">' + "".join(items) + '</ol>'
-    refresh_tag = '<meta http-equiv="refresh" content="3">' if refresh else ""
+    watch = '<script>' + WATCH_SCRIPT + '</script>' if refresh else ""
     engine = {"claude": "Claude Code", "codex": "Codex"}.get(provider, "")
     eyebrow = '<p class="eyebrow">Votre assistant personnel' + (f' / {escape(engine)}' if engine else '') + '</p>'
-    return (f'<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">{refresh_tag}'
-            f'<title>Votre assistant · Vibe Claw Light</title><style>{STYLE}</style></head><body>'
+    return (f'<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+            f'<title>Votre assistant · Vibe Claw Light</title><style>{STYLE}</style></head><body data-watch="{"true" if refresh else "false"}">'
             '<div class="shell"><header class="brandbar"><div class="brand">parlons<span> ia</span></div>'
             '<span class="local">Vibe Claw Light / installation</span></header>'
             f'<div class="layout">{steps}<main>{eyebrow}{body}</main>'
             '<footer class="footer"><span>Un assistant sur votre ordinateur.</span><span>PC allumé · Internet connecté</span></footer>'
-            '</div></div></body></html>').encode("utf-8")
+            f'</div></div>{watch}</body></html>').encode("utf-8")
 
 
 def render_wizard(wizard) -> bytes:

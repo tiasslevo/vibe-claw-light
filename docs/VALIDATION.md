@@ -1,6 +1,14 @@
-# Vérifications de la version 0.3.0
+# Vérifications des versions 0.3.x
 
 Préparation du 27 septembre 2026. Les tests du programme, les navigateurs réels et les comptes de modèles sont distingués ci-dessous.
+
+## Correctif 0.3.1
+
+Le rechargement complet toutes les trois secondes est remplacé par une vérification en arrière-plan. Le contenu reste intact tant que le rendu serveur ne change pas : le détail du lien Telegram reste ouvert et le texte sélectionné reste sélectionné. Le formulaire de saisie n'est pas sondé. Les transitions de connexion, d'association et de démarrage restent automatiques.
+
+Validation ciblée : 3 parcours réussis dans Chromium 149.0.7827.55 sous Linux (champs conservés, lien sélectionné pendant deux contrôles, association jusqu'à prêt, connexion manuelle détectée, annulation), ainsi que les 10 tests HTTP de l'installation. Fournisseur et Telegram simulés ; aucun nouvel appel à un compte réel. Le script local est autorisé par une empreinte CSP, avec des requêtes limitées à la même origine.
+
+Le relevé qui suit porte sur la version 0.3.0 ; sa campagne complète n'a pas été répétée localement pour ce correctif d'interface.
 
 ## Défauts reproduits et corrigés
 

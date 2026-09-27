@@ -16,7 +16,7 @@ import webbrowser
 from .auth import LoginAttempt, start_login
 from .config import read_values, save_config
 from .providers import auth_status, executable_command, find_cli
-from .setup_ui import page
+from .setup_ui import WATCH_CSP, page
 from .storage import FileLock, atomic_write, is_locked, write_json
 from .telegram import Telegram, TelegramError, retry_telegram
 
@@ -466,7 +466,7 @@ class WizardHandler(BaseHTTPRequestHandler):
         self.send_header("Referrer-Policy", "same-origin")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
-        self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
+        self.send_header("Content-Security-Policy", f"default-src 'none'; script-src {WATCH_CSP}; connect-src 'self'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'")
         if location:
             self.send_header("Location", location)
         self.end_headers()
