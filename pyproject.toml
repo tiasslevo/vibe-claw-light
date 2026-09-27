@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vibe-claw-light"
+version = "0.1.0"
+description = "Votre assistant personnel Telegram, avec Codex ou Claude Code."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{name = "Boris Koulevo"}]
+dependencies = []
+
+[project.scripts]
+vibe-claw-light = "vibe_claw_light.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+vibe_claw_light = ["*.txt"]

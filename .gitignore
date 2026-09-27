@@ -1,0 +1,17 @@
+config.env
+.env
+.venv/
+data/
+memory/
+workspace/
+identity/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.DS_Store
+Thumbs.db
+.codex/
+.claude/

@@ -1,0 +1,14 @@
+include run.py
+include config.env.example
+include uv.lock
+include AGENTS.md
+include .gitignore
+include install.cmd
+include start.cmd
+include stop.cmd
+include start.sh
+recursive-include docs *.md
+recursive-include scripts *.ps1 *.sh
+recursive-include tests *.py
+recursive-include examples *.txt
+recursive-include src/vibe_claw_light *.txt

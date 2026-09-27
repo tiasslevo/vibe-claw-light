@@ -1,0 +1,421 @@
+"""HTTP local et Telegram simulé : aucun bot réel, aucun compte fournisseur."""
+from __future__ import annotations
+
+from contextlib import redirect_stdout
+import http.client
+import io
+import os
+from pathlib import Path
+import queue
+import tempfile
+import threading
+import time
+import unittest
+from unittest.mock import Mock, patch
+from urllib.parse import urlencode
+
+from vibe_claw_light.config import load_config, read_values, save_config
+from vibe_claw_light.onboarding import Wizard, WizardServer, paired_owner, setup
+from vibe_claw_light.storage import FileLock, atomic_write, read_json, write_json
+from vibe_claw_light.telegram import TelegramError
+
+
+# Faux tokens de forme valide, sans valeur réelle.
+TOKEN = "123456:" + "a" * 32
+OTHER_TOKEN = "654321:" + "b" * 32
+
+
+def wait_until(predicate, timeout=3):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return bool(predicate())
+
+
+def message(code, owner=42, **extra):
+    return {"text": "/start " + code, "chat": {"id": owner, "type": "private"},
+            "from": {"id": owner, "is_bot": False}, **extra}
+
+
+class FakeTelegram:
+    def __init__(self):
+        self.inbox = queue.Queue()
+        self.webhook = ""
+        self.update_calls = 0
+        self.methods = []
+        self.failure = None
+
+    def get_me(self):
+        if self.failure:
+            raise self.failure
+        return {"id": 123456, "is_bot": True, "username": "TestAssistantBot"}
+
+    def request(self, method):
+        self.methods.append(method)
+        if method != "getWebhookInfo":
+            raise AssertionError("Requête Telegram inattendue")
+        return {"url": self.webhook}
+
+    def updates(self, offset=None, timeout=5):
+        self.update_calls += 1
+        try:
+            batch = self.inbox.get(timeout=0.03)
+        except queue.Empty:
+            return []
+        if isinstance(batch, Exception):
+            raise batch
+        return batch
+
+    def push(self, msg, update_id=1):
+        self.inbox.put([{"update_id": update_id, "message": msg}])
+
+
+class WizardTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="vibe-onboarding-test-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.fake = FakeTelegram()
+        self.wizards = []
+        self.addCleanup(self.close_wizards)
+
+    def close_wizards(self):
+        for wizard in self.wizards:
+            wizard.close()
+
+    def wizard(self, provider="codex", authenticated=True):
+        wizard = Wizard(self.root, provider, "test-cli", authenticated,
+                        telegram_factory=lambda token: self.fake)
+        self.wizards.append(wizard)
+        return wizard
+
+    def configure(self, wizard, **fields):
+        wizard.configure({"name": "Léa", "workspace": "mes projets", "token": TOKEN, **fields})
+
+    def test_private_owner_requires_exact_nonce_and_identity(self):
+        self.assertEqual(paired_owner(message("secret"), "secret"), 42)
+        invalid = [
+            message("wrong"), message("secret", text="/start"),
+            message("secret", chat={"id": 42, "type": "group"}),
+            message("secret", chat={"id": 99, "type": "private"}),
+            message("secret", **{"from": {"id": 42, "is_bot": True}}),
+            message("secret", **{"from": {"id": "42", "is_bot": False}}),
+            message("secret", **{"from": {"id": 42}}),
+            message("secret", owner=True), {}, None,
+        ]
+        for candidate in invalid:
+            with self.subTest(candidate=candidate):
+                self.assertIsNone(paired_owner(candidate, "secret"))
+
+    def test_only_matching_private_start_persists_configuration(self):
+        wizard = self.wizard()
+        self.configure(wizard)
+        self.assertTrue(wait_until(lambda: wizard.phase == "pairing"))
+        self.assertFalse((self.root / "config.env").exists())
+        self.fake.push(message("unrelated"))
+        self.fake.push(message(wizard.pair_code, chat={"id": 42, "type": "group"}), 2)
+        self.assertFalse(wizard.done.wait(0.15))
+        self.fake.push(message(wizard.pair_code), 3)
+        self.assertTrue(wizard.done.wait(3))
+        config = load_config(self.root)
+        self.assertEqual((config.owner_id, config.chat_id), (42, 42))
+        self.assertEqual(config.name, "Léa")
+        self.assertEqual(config.codex_bin, "test-cli")
+        self.assertEqual(config.workspace, self.root / "mes projets")
+        self.assertTrue(config.workspace.is_dir())
+        self.assertTrue((self.root / "data" / "files").is_dir())
+        self.assertTrue((self.root / "identity" / "SOUL.md").exists())
+        self.assertEqual(read_json(self.root / "data" / "state.json")["offset"], 4)
+
+    def test_existing_same_bot_owner_keeps_identity_memory_without_polling(self):
+        save_config(self.root, {"TELEGRAM_TOKEN": TOKEN, "TELEGRAM_OWNER_ID": "42", "TELEGRAM_CHAT_ID": "42"})
+        soul = self.root / "identity" / "SOUL.md"
+        memory = self.root / "memory" / "profile.json"
+        atomic_write(soul, "Ma voix personnelle")
+        atomic_write(memory, "Mémoire privée à garder")
+        write_json(self.root / "data" / "state.json", {"offset": 200, "queue": [], "sessions": {"codex": "old"}})
+        wizard = self.wizard()
+        self.configure(wizard, token="", keep_owner="1")
+        self.assertTrue(wizard.done.wait(3))
+        self.assertEqual(self.fake.update_calls, 0)
+        self.assertEqual(soul.read_text(encoding="utf-8"), "Ma voix personnelle")
+        self.assertEqual(memory.read_text(encoding="utf-8"), "Mémoire privée à garder")
+        self.assertEqual(read_json(self.root / "data" / "state.json")["offset"], 200)
+
+    def test_changed_token_requires_pairing_and_clears_old_offsets_for_same_owner(self):
+        save_config(self.root, {"TELEGRAM_TOKEN": TOKEN, "TELEGRAM_OWNER_ID": "42", "TELEGRAM_CHAT_ID": "42"})
+        write_json(self.root / "data" / "state.json", {"offset": 99999999, "queue": [{"text": "old"}], "active": {}, "paused": True, "sessions": {"codex": "old"}})
+        wizard = self.wizard()
+        self.configure(wizard, token=OTHER_TOKEN, keep_owner="1")
+        self.assertTrue(wait_until(lambda: wizard.phase == "pairing"))
+        self.fake.push(message(wizard.pair_code))
+        self.assertTrue(wizard.done.wait(3))
+        self.assertEqual(read_values(self.root)["TELEGRAM_TOKEN"], OTHER_TOKEN)
+        self.assertEqual(read_json(self.root / "data" / "state.json"), {
+            "offset": 2, "sessions": {}, "queue": [], "active": None, "paused": False,
+        })
+
+    def test_fresh_pairing_keeps_only_updates_after_the_private_start(self):
+        save_config(self.root, {"TELEGRAM_TOKEN": TOKEN, "TELEGRAM_OWNER_ID": "42", "TELEGRAM_CHAT_ID": "42"})
+        write_json(self.root / "data" / "state.json", {"offset": 3, "queue": [{"text": "old"}], "sessions": {"codex": "old"}})
+        wizard = self.wizard()
+        self.configure(wizard)
+        self.assertTrue(wait_until(lambda: wizard.phase == "pairing"))
+        self.fake.inbox.put([
+            {"update_id": 90, "message": message("obsolete")},
+            {"update_id": 91, "message": message(wizard.pair_code)},
+            {"update_id": 92, "message": message("new-task")},
+        ])
+        self.assertTrue(wizard.done.wait(3))
+        state = read_json(self.root / "data" / "state.json")
+        self.assertEqual(state["offset"], 92)
+        self.assertEqual(state["queue"], [])
+        self.assertEqual(state["sessions"], {})
+
+    def test_cannot_reassign_existing_private_memory_to_another_owner(self):
+        save_config(self.root, {"TELEGRAM_TOKEN": TOKEN, "TELEGRAM_OWNER_ID": "42", "TELEGRAM_CHAT_ID": "42"})
+        original = (self.root / "config.env").read_bytes()
+        wizard = self.wizard()
+        self.configure(wizard, token=OTHER_TOKEN)
+        self.assertTrue(wait_until(lambda: wizard.phase == "pairing"))
+        self.fake.push(message(wizard.pair_code, owner=99))
+        self.assertTrue(wait_until(lambda: wizard.phase == "configure"))
+        self.assertIn("autre compte", wizard.error)
+        self.assertEqual((self.root / "config.env").read_bytes(), original)
+        self.assertFalse(wizard.done.is_set())
+
+    def test_webhook_is_refused_without_modifying_it(self):
+        self.fake.webhook = "https://example.invalid/hook"
+        wizard = self.wizard()
+        self.configure(wizard)
+        self.assertTrue(wait_until(lambda: bool(wizard.error)))
+        self.assertIn("webhook", wizard.error)
+        self.assertEqual(self.fake.methods, ["getWebhookInfo"])
+        self.assertEqual(self.fake.update_calls, 0)
+        self.assertFalse((self.root / "config.env").exists())
+
+    def test_token_in_exception_is_never_echoed(self):
+        self.fake.failure = TelegramError(401, "https://api.telegram.org/bot" + TOKEN)
+        wizard = self.wizard()
+        self.configure(wizard)
+        self.assertTrue(wait_until(lambda: bool(wizard.error)))
+        self.assertNotIn(TOKEN, wizard.render().decode())
+        self.assertNotIn("api.telegram", wizard.error)
+
+    def test_poll_conflict_returns_to_form(self):
+        self.fake.inbox.put(TelegramError(409, "conflict"))
+        wizard = self.wizard()
+        self.configure(wizard)
+        self.assertTrue(wait_until(lambda: bool(wizard.error)))
+        self.assertIn("autre programme", wizard.error)
+        self.assertFalse(wizard.done.is_set())
+
+    def test_expired_nonce_does_not_write_configuration(self):
+        wizard = self.wizard()
+        with patch("vibe_claw_light.onboarding.PAIR_TIMEOUT", 0.01):
+            self.configure(wizard)
+            self.assertTrue(wait_until(lambda: bool(wizard.error)))
+        self.assertIn("expiré", wizard.error)
+        self.assertFalse((self.root / "config.env").exists())
+
+    def test_cancelled_pairing_cannot_save_late_result(self):
+        wizard = self.wizard()
+        self.configure(wizard)
+        self.assertTrue(wait_until(lambda: wizard.phase == "pairing"))
+        code = wizard.pair_code
+        wizard.cancel_pairing()
+        self.fake.push(message(code))
+        self.assertFalse(wizard.done.wait(0.15))
+        self.assertFalse((self.root / "config.env").exists())
+
+    def test_claude_shell_requires_checkbox(self):
+        for allow in ("0", "1"):
+            with self.subTest(allow=allow):
+                wizard = self.wizard(provider="claude")
+                self.configure(wizard, allow_shell=allow)
+                self.assertTrue(wait_until(lambda: wizard.phase == "pairing"))
+                self.fake.push(message(wizard.pair_code))
+                self.assertTrue(wizard.done.wait(3))
+                self.assertEqual(load_config(self.root).allow_shell, allow == "1")
+
+    def test_service_started_during_pairing_prevents_save(self):
+        wizard = self.wizard()
+        self.configure(wizard)
+        self.assertTrue(wait_until(lambda: wizard.phase == "pairing"))
+        with FileLock(self.root / "data" / "service.lock"):
+            self.fake.push(message(wizard.pair_code))
+            self.assertTrue(wait_until(lambda: bool(wizard.error)))
+        self.assertIn("python run.py stop", wizard.error)
+        self.assertFalse((self.root / "config.env").exists())
+
+    def test_login_launches_only_selected_cli_and_preserves_instance_environment(self):
+        wizard = self.wizard(provider="claude", authenticated=False)
+        process = Mock()
+        process.poll.return_value = 0
+        with patch.dict(os.environ, {"VIBE_CLAW_ROOT": "/private/calling-instance"}), \
+                patch("vibe_claw_light.onboarding.subprocess.Popen", return_value=process) as popen, \
+                patch("vibe_claw_light.onboarding.auth_status", return_value=(True, "connected")), \
+                redirect_stdout(io.StringIO()):
+            wizard.login()
+            self.assertTrue(wait_until(lambda: wizard.phase == "configure"))
+        self.assertEqual(popen.call_args.args[0], ["test-cli", "auth", "login"])
+        self.assertEqual(popen.call_args.kwargs["env"]["VIBE_CLAW_ROOT"], "/private/calling-instance")
+
+    def test_auth_failure_allows_retry(self):
+        wizard = self.wizard(authenticated=False)
+        process = Mock()
+        process.poll.return_value = 1
+        with patch("vibe_claw_light.onboarding.subprocess.Popen", return_value=process), \
+                patch("vibe_claw_light.onboarding.auth_status", return_value=(False, "no")), \
+                redirect_stdout(io.StringIO()):
+            wizard.login()
+            self.assertTrue(wait_until(lambda: bool(wizard.error)))
+        self.assertEqual(wizard.phase, "auth")
+        self.assertIn("réessayer", wizard.error)
+
+    def test_setup_refuses_running_instance_before_auth(self):
+        with FileLock(self.root / "data" / "service.lock"), \
+                patch("vibe_claw_light.onboarding.auth_status") as auth, \
+                redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(setup(self.root, "codex"), 1)
+        auth.assert_not_called()
+        self.assertIn("python run.py stop", output.getvalue())
+
+    def test_setup_missing_cli_fails_without_opening_browser(self):
+        with patch("vibe_claw_light.onboarding.find_cli", return_value=None), \
+                patch("vibe_claw_light.onboarding.webbrowser.open") as browser, \
+                redirect_stdout(io.StringIO()):
+            self.assertEqual(setup(self.root, "claude"), 1)
+        browser.assert_not_called()
+
+
+class HttpTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="vibe-onboarding-http-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        save_config(self.root, {"TELEGRAM_TOKEN": TOKEN})
+        self.wizard = Wizard(self.root, "codex", "test-cli", True)
+        self.server = WizardServer(self.wizard)
+        self.thread = threading.Thread(target=self.server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
+        self.thread.start()
+        self.addCleanup(self.close_server)
+
+    def close_server(self):
+        self.wizard.close()
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=1)
+
+    def request(self, method="GET", path=None, fields=None, headers=None, raw=None):
+        connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=3)
+        request_headers = {}
+        data = raw
+        if method == "POST":
+            request_headers.update({"Origin": self.server.origin, "Content-Type": "application/x-www-form-urlencoded"})
+            if data is None:
+                data = urlencode({"csrf": self.wizard.csrf, **(fields or {})})
+        request_headers.update(headers or {})
+        connection.request(method, path or self.wizard.path, body=data, headers=request_headers)
+        response = connection.getresponse()
+        status, output, received = response.status, response.read().decode(), dict(response.getheaders())
+        connection.close()
+        return status, output, received
+
+    def test_page_is_only_reachable_at_secret_path(self):
+        self.assertEqual(self.request()[0], 200)
+        self.assertEqual(self.request(path="/")[0], 404)
+        self.assertEqual(self.request(path=self.wizard.path + "?ignored=true")[0], 404)
+        self.assertEqual(self.request(path="/not-the-secret/")[0], 404)
+
+    def test_host_and_origin_rebinding_are_blocked(self):
+        self.assertEqual(self.request(headers={"Host": "evil.invalid"})[0], 403)
+        self.assertEqual(self.request(headers={"Origin": "https://evil.invalid"})[0], 403)
+        self.assertEqual(self.request(headers={"Sec-Fetch-Site": "cross-site"})[0], 403)
+
+    def test_existing_token_is_blank_masked_and_never_in_html(self):
+        status, html, headers = self.request()
+        self.assertEqual(status, 200)
+        self.assertIn('type="password" name="token"', html)
+        self.assertNotIn(TOKEN, html)
+        self.assertEqual(headers["Cache-Control"], "no-store")
+        self.assertEqual(headers["Referrer-Policy"], "no-referrer")
+        self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
+
+    def test_form_escapes_untrusted_display_values(self):
+        self.wizard.name = '<script>alert("test")</script>'
+        self.wizard.workspace = '"><img src=x onerror=alert(1)>'
+        _, html, _ = self.request()
+        self.assertNotIn("<script>", html)
+        self.assertNotIn("<img", html)
+        self.assertIn("&lt;script&gt;", html)
+
+    def test_post_requires_origin_and_csrf(self):
+        path = self.wizard.path + "configure"
+        with patch.object(self.wizard, "configure") as configure:
+            self.assertEqual(self.request("POST", path, fields={"csrf": "wrong"})[0], 403)
+            self.assertEqual(self.request("POST", path, fields={"csrf": "é"})[0], 403)
+            self.assertEqual(self.request("POST", path, raw="name=anything")[0], 403)
+            self.assertEqual(self.request("POST", path, headers={"Origin": "null"})[0], 403)
+            self.assertEqual(self.request("POST", path, headers={"Origin": ""})[0], 403)
+            configure.assert_not_called()
+
+    def test_valid_post_redirects_without_echoing_token(self):
+        with patch.object(self.wizard, "configure") as configure:
+            status, html, headers = self.request("POST", self.wizard.path + "configure", fields={"token": OTHER_TOKEN})
+        self.assertEqual(status, 303)
+        self.assertEqual(headers["Location"], self.wizard.path)
+        self.assertNotIn(OTHER_TOKEN, html)
+        configure.assert_called_once_with({"token": OTHER_TOKEN})
+
+    def test_rejected_post_consumes_delayed_body_before_closing_connection(self):
+        # Un POST arrive souvent en deux paquets. Fermer après les seuls headers
+        # provoquait un reset TCP intermittent sur Windows au lieu du 403/404.
+        cases = [
+            (self.wizard.path + "configure", "null", self.server.host, 403),
+            (self.wizard.path + "configure", self.server.origin, "evil.invalid", 403),
+            ("/unknown/configure", self.server.origin, self.server.host, 404),
+        ]
+        with patch.object(self.wizard, "configure") as configure:
+            for path, origin, host, expected in cases:
+                with self.subTest(path=path, origin=origin, host=host):
+                    connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=3)
+                    try:
+                        body = urlencode({"csrf": self.wizard.csrf, "token": OTHER_TOKEN}).encode()
+                        connection.putrequest("POST", path, skip_host=True)
+                        connection.putheader("Host", host)
+                        connection.putheader("Origin", origin)
+                        connection.putheader("Content-Type", "application/x-www-form-urlencoded")
+                        connection.putheader("Content-Length", str(len(body)))
+                        connection.endheaders()
+                        time.sleep(0.02)
+                        connection.send(body)
+                        response = connection.getresponse()
+                        self.assertEqual(response.status, expected)
+                        self.assertNotIn(OTHER_TOKEN, response.read().decode())
+                    finally:
+                        connection.close()
+        configure.assert_not_called()
+
+    def test_duplicate_fields_and_large_body_rejected(self):
+        path = self.wizard.path + "configure"
+        data = urlencode({"csrf": self.wizard.csrf}) + "&token=a&token=b"
+        self.assertEqual(self.request("POST", path, raw=data)[0], 400)
+        self.assertEqual(self.request("POST", path, raw="a=" + "a" * 9000)[0], 400)
+
+    def test_get_cannot_trigger_setup_mutation(self):
+        with patch.object(self.wizard, "configure") as configure:
+            self.assertEqual(self.request(path=self.wizard.path + "configure")[0], 404)
+        configure.assert_not_called()
+
+    def test_http_does_not_log_secret_url_or_form_values(self):
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            self.request()
+            self.request("POST", self.wizard.path + "configure", fields={"csrf": "wrong", "token": OTHER_TOKEN})
+        self.assertEqual(stderr.getvalue(), "")
+
+
+if __name__ == "__main__":
+    unittest.main()

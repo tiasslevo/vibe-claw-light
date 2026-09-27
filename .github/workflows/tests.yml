@@ -1,0 +1,36 @@
+name: Tests
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Tests hors ligne
+        env:
+          PYTHONPATH: src
+          PYTHONUTF8: "1"
+        run: python -m unittest discover -s tests -v
+      - name: Vérifier le paquet
+        run: |
+          python -m pip install build
+          python -m build
+      - name: Syntaxe PowerShell
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path scripts/install.ps1), [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count) { $errors | Out-String | Write-Error; exit 1 }
